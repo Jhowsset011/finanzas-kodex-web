@@ -1,17 +1,23 @@
-/* Finanzas KODEX — sellers web app (static, Supabase JS v2) */
+/* Finanzas KODEX — web app for sellers (static, Supabase JS v2) */
 'use strict';
 
 /* ================= Config ================= */
 const SUPABASE_URL = 'https://ltvpjaqafyggenpdbekl.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_WCyNNOLe4jegZGRbJ6oNPQ_1aBy7mWz'; // <-- reemplazar antes de publicar
+const SUPABASE_ANON_KEY = 'sb_publishable_WCyNNOLe4jegZGRbJ6oNPQ_1aBy7mWz';
 const LOGIN_DOMAIN = '@finanzas.kodex';
 
 let sb = null;
-let profile = null;          // {id, name, username, role}
-let productsCache = [];      // [{id,name,reference,category,cost_dop}]
-let sellersCache = [];       // owner only: [{id,name,username,role}]
-let selectedProduct = null;
-let currentTab = null;
+let profile = null;            // {id,name,username,role}
+let productsCache = [];
+let sellersCache = [];
+let currentView = 'registrar';
+let periodMode = 'month';       // day | month | year
+let refDateISO = todayISO();
+let analysisTab = 'item';       // item | cat
+let editingId = null;
+let deleteId = null;
+let dashSales = [];             // sales in current dashboard period
+let dashAd = {};                // {date: amount}
 
 /* ================= Helpers ================= */
 const $ = id => document.getElementById(id);
@@ -24,32 +30,36 @@ const fmtMoney = n => new Intl.NumberFormat('es-DO', {
   minimumFractionDigits: 0, maximumFractionDigits: 2
 }).format(Number(n) || 0);
 
-const fmtDate = iso => {
+const MESES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+function fmtLong(iso) {
   if (!iso) return '—';
-  const d = new Date(iso + 'T12:00:00');
-  return d.toLocaleDateString('es-DO', { day: 'numeric', month: 'short', year: 'numeric' });
-};
-
-const todayISO = () => {
+  const [y, m, d] = iso.split('-').map(Number);
+  return d + ' ' + MESES[m - 1] + ' de ' + y;
+}
+function badgeParts(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return { d: String(d), m: MESES[m - 1] };
+}
+function todayISO() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
          String(d.getDate()).padStart(2, '0');
-};
-
-const monthLabel = ym => {
-  const [y, m] = ym.split('-').map(Number);
-  return new Date(y, m - 1, 1).toLocaleDateString('es-DO', { month: 'long', year: 'numeric' });
-};
-const shiftMonth = (ym, delta) => {
+}
+function shiftMonth(ym, delta) {
   const [y, m] = ym.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-};
-const monthRange = ym => {
-  const from = ym + '-01';
-  const to = shiftMonth(ym, 1) + '-01';
-  return { from, to };
-};
+}
+function periodRange() {
+  if (periodMode === 'day') return { from: refDateISO, to: refDateISO };
+  if (periodMode === 'year') {
+    const y = refDateISO.slice(0, 4);
+    return { from: y + '-01-01', to: y + '-12-31' };
+  }
+  const ym = refDateISO.slice(0, 7);
+  return { from: ym + '-01', to: shiftMonth(ym, 1) + '-01' };
+}
+const isOwner = () => profile && profile.role === 'owner';
 
 let toastTimer = null;
 function toast(msg, isErr) {
@@ -59,7 +69,6 @@ function toast(msg, isErr) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.add('hidden'), 3200);
 }
-
 function dbError(err, fallback) {
   console.error(err);
   if (!navigator.onLine) return 'Sin conexión. Revisa tu internet e inténtalo de nuevo.';
@@ -68,16 +77,20 @@ function dbError(err, fallback) {
   return fallback || 'Ocurrió un error. Inténtalo de nuevo.';
 }
 
-/* Profit math (single source of truth):
+/* Profit math:
    margin      = qty*price - qty*cost - shipping
-   sellerShare = margin / 2            (Víctor / Ana)
-   ownerNet    = sellerShare - adPortion   (dueño, sobre venta de vendedor)
-   ownerNet    = margin - adPortion         (dueño, venta propia)
-   adPortion   = ad_spend[date] / nº de ventas de ese día (todas) */
+   sellerShare = margin / 2
+   ownerNet (seller sale) = share - adPortion(date)
+   ownerNet (own sale)    = margin - adPortion(date)
+   adPortion(date) = ad_spend[date] / nº ventas ese día (todas) */
 const saleMargin = (s, cost) =>
   (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0) -
   (Number(s.quantity) || 0) * (Number(cost) || 0) -
   (Number(s.shipping_cost_dop) || 0);
+
+const productById = id => productsCache.find(p => String(p.id) === String(id));
+const sellerById = id => sellersCache.find(s => s.id === id);
+const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 /* ================= Auth ================= */
 async function handleLogin(e) {
@@ -92,30 +105,24 @@ async function handleLogin(e) {
     return;
   }
   const btn = $('login-btn');
-  btn.disabled = true;
-  btn.textContent = 'Entrando…';
+  btn.disabled = true; btn.textContent = 'Entrando…';
   try {
-    const email = username + LOGIN_DOMAIN;
-    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    const { data, error } = await sb.auth.signInWithPassword({
+      email: username + LOGIN_DOMAIN, password
+    });
     if (error) throw error;
-    const user = data.user;
     const { data: prof, error: pErr } = await sb.from('sellers')
-      .select('id,name,username,role').eq('auth_user_id', user.id).single();
-    if (pErr || !prof) {
-      await sb.auth.signOut();
-      throw new Error('profile-missing');
-    }
+      .select('id,name,username,role').eq('auth_user_id', data.user.id).single();
+    if (pErr || !prof) { await sb.auth.signOut(); throw new Error('profile-missing'); }
     profile = prof;
     await enterApp();
   } catch (err) {
-    console.error(err);
     errBox.textContent = err.message === 'profile-missing'
       ? 'Tu cuenta no tiene un perfil asignado. Habla con Jhowsse.'
       : 'Usuario o contraseña incorrectos.';
     errBox.classList.remove('hidden');
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Entrar';
+    btn.disabled = false; btn.textContent = 'Entrar';
   }
 }
 
@@ -132,97 +139,88 @@ async function restoreSession() {
 
 async function logout() {
   await sb.auth.signOut();
-  profile = null;
-  productsCache = [];
-  sellersCache = [];
-  selectedProduct = null;
+  profile = null; productsCache = []; sellersCache = [];
+  dashSales = []; dashAd = {}; editingId = null;
   $('login-pass').value = '';
   $('view-main').classList.add('hidden');
   $('view-login').classList.remove('hidden');
 }
 
-/* ================= Navigation ================= */
-const SELLER_TABS = [
-  { id: 'registrar', label: 'Registrar', icon: '＋' },
-  { id: 'misventas', label: 'Mis ventas', icon: '▤' },
-  { id: 'resumen',    label: 'Resumen',   icon: '◔' },
-];
-const OWNER_TABS = [
-  { id: 'ventas',     label: 'Ventas',     icon: '▤' },
-  { id: 'vendedores', label: 'Vendedores', icon: '◯' },
-  { id: 'publicidad', label: 'Publicidad', icon: '◈' },
-  { id: 'productos',  label: 'Productos',  icon: '▦' },
-];
-
-function buildNav() {
-  const tabs = profile.role === 'owner' ? OWNER_TABS : SELLER_TABS;
-  const nav = $('bottomnav');
-  nav.innerHTML = '';
-  tabs.forEach(t => {
-    const b = document.createElement('button');
-    b.innerHTML = '<span class="ico">' + t.icon + '</span>' + esc(t.label);
-    b.onclick = () => switchTab(t.id);
-    b.dataset.tab = t.id;
-    nav.appendChild(b);
-  });
-  switchTab(tabs[0].id);
+async function changePassword() {
+  const p1 = $('new-pass').value, p2 = $('new-pass2').value;
+  const errBox = $('pass-error');
+  errBox.classList.add('hidden');
+  if (!p1 || p1.length < 6) {
+    errBox.textContent = 'La contraseña debe tener al menos 6 caracteres.';
+    errBox.classList.remove('hidden'); return;
+  }
+  if (p1 !== p2) {
+    errBox.textContent = 'Las contraseñas no coinciden.';
+    errBox.classList.remove('hidden'); return;
+  }
+  const btn = $('pass-save');
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  try {
+    const { error } = await sb.auth.updateUser({ password: p1 });
+    if (error) throw error;
+    closeModal('modal-pass-back');
+    $('new-pass').value = ''; $('new-pass2').value = '';
+    toast('Contraseña actualizada.');
+  } catch (err) {
+    errBox.textContent = dbError(err, 'No se pudo cambiar la contraseña.');
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar';
+  }
 }
 
-function switchTab(id) {
-  currentTab = id;
-  document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
-  $('tab-' + id).classList.remove('hidden');
-  document.querySelectorAll('#bottomnav button').forEach(b =>
-    b.classList.toggle('active', b.dataset.tab === id));
-  if (id === 'registrar') initSaleForm();
-  if (id === 'misventas') loadMySales();
-  if (id === 'resumen') loadMySummary();
-  if (id === 'ventas') loadOwnerSales();
-  if (id === 'vendedores') loadSellersSummary();
-  if (id === 'publicidad') initAdForm();
-  if (id === 'productos') loadProducts();
+/* ================= Navigation ================= */
+function showView(v) {
+  currentView = v;
+  $('view-registrar').classList.toggle('hidden', v !== 'registrar');
+  $('view-dashboard').classList.toggle('hidden', v !== 'dashboard');
+  $('nav-registrar').classList.toggle('active', v === 'registrar');
+  $('nav-dashboard').classList.toggle('active', v === 'dashboard');
+  if (v === 'registrar') loadRecent();
+  if (v === 'dashboard') loadDashboard();
 }
 
 async function enterApp() {
-  $('user-name').textContent = profile.name;
-  $('user-role').textContent = profile.role === 'owner' ? 'Dueño' : 'Vendedor';
+  $('topbar-user').textContent = profile.name + (isOwner() ? ' · Dueño' : ' · Vendedor');
   $('view-login').classList.add('hidden');
   $('view-main').classList.remove('hidden');
+  // owner-only controls
+  document.querySelectorAll('#btn-refresh-sources, #btn-refresh-all').forEach(b =>
+    b.classList.toggle('hidden', !isOwner()));
+  $('card-ad-days').classList.toggle('hidden', !isOwner());
+  $('card-sources').classList.toggle('hidden', !isOwner());
   try {
-    await loadProductsCache();
-    if (profile.role === 'owner') await loadSellersCache();
+    const { data, error } = await sb.from('products')
+      .select('id,name,reference,category,subcategory,cost_dop').order('name');
+    if (error) throw error;
+    productsCache = data || [];
+    if (isOwner()) {
+      const { data: ss, error: sErr } = await sb.from('sellers').select('id,name,username,role');
+      if (sErr) throw sErr;
+      sellersCache = ss || [];
+    }
+    buildProductSelect();
   } catch (err) {
     toast(dbError(err, 'No se pudo cargar el catálogo.'), true);
   }
-  buildNav();
+  resetSaleForm();
+  showView('registrar');
 }
 
-/* ================= Shared data ================= */
-async function loadProductsCache() {
-  const { data, error } = await sb.from('products')
-    .select('id,name,reference,category,cost_dop').order('name');
-  if (error) throw error;
-  productsCache = data || [];
-}
-async function loadSellersCache() {
-  const { data, error } = await sb.from('sellers').select('id,name,username,role');
-  if (error) throw error;
-  sellersCache = data || [];
-}
-const productById = id => productsCache.find(p => String(p.id) === String(id));
-const sellerById = id => sellersCache.find(s => s.id === id);
-const norm = s => String(s || '').toLowerCase()
-  .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-/* ================= Seller: register sale ================= */
-function initSaleForm() {
-  if (!$('sale-date').value) $('sale-date').value = todayISO();
-  updatePreview();
+/* ================= Sale form ================= */
+function buildProductSelect() {
+  const sel = $('sale-product');
+  sel.innerHTML = '<option value="">Selecciona un producto</option>' +
+    productsCache.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
 }
 
 function bindSaleForm() {
-  const search = $('sale-product-search');
-  const results = $('product-results');
+  const search = $('sale-search'), results = $('ac-results'), sel = $('sale-product');
   search.addEventListener('input', () => {
     const q = norm(search.value.trim());
     if (q.length < 2) { results.classList.add('hidden'); return; }
@@ -230,416 +228,604 @@ function bindSaleForm() {
       norm(p.name).includes(q) || norm(p.reference).includes(q)).slice(0, 8);
     if (!matches.length) { results.classList.add('hidden'); return; }
     results.innerHTML = matches.map(p =>
-      '<div class="opt" data-id="' + p.id + '">' + esc(p.name) +
-      '<small>' + esc(p.reference || '') + ' · ' + fmtMoney(p.cost_dop) + '</small></div>'
+      '<div class="ac-item" data-id="' + p.id + '"><div class="n">' + esc(p.name) +
+      '</div><div class="m">' + esc(p.reference || '') + ' · ' + fmtMoney(p.cost_dop) + '</div></div>'
     ).join('');
     results.classList.remove('hidden');
-    results.querySelectorAll('.opt').forEach(o => o.onclick = () => selectProduct(o.dataset.id));
+    results.querySelectorAll('.ac-item').forEach(o =>
+      o.onclick = () => { selectProductById(o.dataset.id); results.classList.add('hidden'); search.value = ''; });
   });
   document.addEventListener('click', e => {
     if (!results.contains(e.target) && e.target !== search) results.classList.add('hidden');
   });
-  $('product-clear').onclick = () => {
-    selectedProduct = null;
-    search.value = '';
-    $('product-selected').classList.add('hidden');
-    search.classList.remove('hidden');
-    search.focus();
-    updatePreview();
-  };
-  ['sale-qty', 'sale-price', 'sale-ship'].forEach(id =>
-    $(id).addEventListener('input', updatePreview));
+  sel.addEventListener('change', () => selectProductById(sel.value || null));
+  ['sale-qty', 'sale-cost', 'sale-price', 'sale-ship'].forEach(id =>
+    $(id).addEventListener('input', updateSummary));
   $('sale-save').onclick = saveSale;
+  $('sale-cancel').onclick = resetSaleForm;
 }
 
-function selectProduct(id) {
-  selectedProduct = productById(id);
-  if (!selectedProduct) return;
-  $('product-results').classList.add('hidden');
-  $('sale-product-search').classList.add('hidden');
-  $('sp-name').textContent = selectedProduct.name;
-  $('sp-cost').textContent = fmtMoney(selectedProduct.cost_dop);
-  $('product-selected').classList.remove('hidden');
-  updatePreview();
+function selectProductById(id) {
+  const p = id ? productById(id) : null;
+  $('sale-product').value = p ? String(p.id) : '';
+  $('sale-cost').value = p ? (p.cost_dop === 0 ? '' : Number(p.cost_dop)) : '';
+  $('sale-cost').placeholder = p ? (p.cost_dop === 0 ? 'Pendiente — escríbelo' : '') : 'Pendiente';
+  updateSummary();
+}
+function selectedProduct() {
+  const id = $('sale-product').value;
+  return id ? productById(id) : null;
 }
 
 function readSaleForm() {
   return {
     qty: Math.max(1, parseInt($('sale-qty').value, 10) || 1),
-    price: Number($('sale-price').value) || 0,
+    cost: Math.max(0, Number($('sale-cost').value) || 0),
+    price: Math.max(0, Number($('sale-price').value) || 0),
     ship: Math.max(0, Number($('sale-ship').value) || 0),
     date: $('sale-date').value || todayISO(),
-    desc: $('sale-desc').value.trim().slice(0, 200),
+    desc: $('sale-desc').value.trim().slice(0, 300),
   };
 }
 
-function updatePreview() {
-  const v = $('sale-preview-value');
-  if (!selectedProduct) { v.textContent = '—'; v.classList.remove('neg'); return; }
+function updateSummary() {
   const f = readSaleForm();
-  const margin = f.qty * f.price - f.qty * Number(selectedProduct.cost_dop) - f.ship;
-  const share = margin / 2;
-  v.textContent = fmtMoney(share);
-  v.classList.toggle('neg', share < 0);
+  const venta = f.qty * f.price;
+  const margin = venta - f.qty * f.cost - f.ship;
+  const pct = venta > 0 ? (margin / venta * 100) : 0;
+  $('ss-venta').textContent = fmtMoney(venta);
+  if (isOwner()) {
+    $('ss-mid-label').textContent = 'Ganancia antes de anuncios';
+    $('ss-mid').textContent = fmtMoney(margin);
+  } else {
+    $('ss-mid-label').textContent = 'Tu parte (50%)';
+    $('ss-mid').textContent = fmtMoney(margin / 2);
+  }
+  $('ss-margen').textContent = pct.toFixed(1) + '%';
+}
+
+function resetSaleForm() {
+  editingId = null;
+  $('sale-date').value = todayISO();
+  $('reg-date-label').textContent = fmtLong(todayISO());
+  $('sale-qty').value = '1';
+  $('sale-search').value = '';
+  $('sale-product').value = '';
+  $('sale-cost').value = ''; $('sale-cost').placeholder = 'Pendiente';
+  $('sale-price').value = '';
+  $('sale-ship').value = '0';
+  $('sale-desc').value = '';
+  $('sale-error').classList.add('hidden');
+  $('sale-save').textContent = 'Registrar venta';
+  $('sale-cancel').classList.add('hidden');
+  updateSummary();
 }
 
 async function saveSale() {
   const errBox = $('sale-error');
   errBox.classList.add('hidden');
-  if (!selectedProduct) {
-    errBox.textContent = 'Busca y elige un producto primero.';
-    errBox.classList.remove('hidden');
-    return;
-  }
+  const p = selectedProduct();
+  if (!p) { errBox.textContent = 'Busca y elige un producto primero.'; errBox.classList.remove('hidden'); return; }
   const f = readSaleForm();
-  if (f.price <= 0) {
-    errBox.textContent = 'Escribe el precio de venta.';
-    errBox.classList.remove('hidden');
-    return;
-  }
+  if (f.price <= 0) { errBox.textContent = 'Escribe el precio de venta.'; errBox.classList.remove('hidden'); return; }
   const btn = $('sale-save');
-  btn.disabled = true;
-  btn.textContent = 'Guardando…';
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  const row = {
+    seller_id: profile.id,
+    product_id: p.id,
+    quantity: f.qty,
+    unit_sale_price_dop: f.price,
+    shipping_cost_dop: f.ship,
+    sale_date: f.date,
+    description: f.desc,
+  };
+  // persist manual cost for products without cost
+  const manualCost = (p.cost_dop === 0 && f.cost > 0) ? f.cost : 0;
   try {
-    const { error } = await sb.from('sales').insert({
-      seller_id: profile.id,           // siempre el vendedor logueado
-      product_id: selectedProduct.id,
-      quantity: f.qty,
-      unit_sale_price_dop: f.price,
-      shipping_cost_dop: f.ship,
-      sale_date: f.date,
-      description: f.desc,
-    });
-    if (error) throw error;
-    toast('Venta registrada.');
-    // limpiar
-    $('product-clear').onclick();
-    $('sale-qty').value = '1';
-    $('sale-price').value = '';
-    $('sale-ship').value = '0';
-    $('sale-desc').value = '';
-    updatePreview();
+    if (editingId) {
+      const { error } = await sb.from('sales').update(row).eq('id', editingId);
+      if (error) throw error;
+      toast('Venta actualizada.');
+    } else {
+      const { error } = await sb.from('sales').insert(row);
+      if (error) throw error;
+      toast('Venta registrada.');
+    }
+    if (manualCost) {
+      try {
+        await sb.from('products').update({ cost_dop: manualCost }).eq('id', p.id);
+        p.cost_dop = manualCost;
+      } catch (_) { /* best effort: RLS may not allow */ }
+    }
+    resetSaleForm();
+    loadRecent();
   } catch (err) {
     errBox.textContent = dbError(err, 'No se pudo guardar la venta.');
     errBox.classList.remove('hidden');
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Guardar venta';
+    btn.textContent = editingId ? 'Guardar cambios' : 'Registrar venta';
   }
 }
 
-/* ================= Seller: my sales + summary ================= */
-const mySalesMonth = { ym: todayISO().slice(0, 7) };
-
-async function loadMySales() {
-  const list = $('my-sales-list');
-  $('mv-month-label').textContent = monthLabel(mySalesMonth.ym);
-  list.innerHTML = '<div class="empty">Cargando…</div>';
-  try {
-    const { from, to } = monthRange(mySalesMonth.ym);
-    const { data, error } = await sb.from('sales').select('*')
-      .eq('seller_id', profile.id)
-      .gte('sale_date', from).lt('sale_date', to)
-      .order('sale_date', { ascending: false })
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    if (!data || !data.length) {
-      list.innerHTML = '<div class="empty">No hay ventas este mes.</div>';
-      return;
-    }
-    list.innerHTML = data.map(s => {
-      const p = productById(s.product_id);
-      const share = saleMargin(s, p && p.cost_dop) / 2;
-      return '<div class="item">' +
-        '<div class="item-head"><span class="item-title">' + esc(p ? p.name : 'Producto') + '</span>' +
-        '<span class="item-date">' + fmtDate(s.sale_date) + '</span></div>' +
-        '<div class="item-rows">' +
-        '<span>Cantidad: <b>' + s.quantity + '</b></span>' +
-        '<span>Precio: <b>' + fmtMoney(s.unit_sale_price_dop) + '</b></span>' +
-        '<span>Envío: <b>' + fmtMoney(s.shipping_cost_dop) + '</b></span>' +
-        '<span>Mi parte: <b class="share' + (share < 0 ? ' neg' : '') + '">' + fmtMoney(share) + '</b></span>' +
-        '</div>' +
-        (s.description ? '<div class="muted">' + esc(s.description) + '</div>' : '') +
-        '</div>';
-    }).join('');
-  } catch (err) {
-    list.innerHTML = '<div class="empty">' + esc(dbError(err)) + '</div>';
-  }
-}
-
-const mySummaryMonth = { ym: todayISO().slice(0, 7) };
-
-async function loadMySummary() {
-  $('rs-month-label').textContent = monthLabel(mySummaryMonth.ym);
-  try {
-    const { from, to } = monthRange(mySummaryMonth.ym);
-    const { data, error } = await sb.from('sales').select('*')
-      .eq('seller_id', profile.id)
-      .gte('sale_date', from).lt('sale_date', to);
-    if (error) throw error;
-    let total = 0, share = 0;
-    (data || []).forEach(s => {
-      const p = productById(s.product_id);
-      total += (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0);
-      share += saleMargin(s, p && p.cost_dop) / 2;
-    });
-    $('rs-total').textContent = fmtMoney(total);
-    $('rs-share').textContent = fmtMoney(share);
-    $('rs-share').classList.toggle('neg', share < 0);
-    $('rs-count').textContent = (data || []).length;
-  } catch (err) {
-    toast(dbError(err), true);
-  }
-}
-
-/* ================= Owner: sales dashboard ================= */
-const ownerMonth = { ym: todayISO().slice(0, 7) };
-let ownerData = { sales: [], ad: {} };
-
-async function fetchOwnerMonth() {
-  const { from, to } = monthRange(ownerMonth.ym);
-  const [sRes, aRes] = await Promise.all([
-    sb.from('sales').select('*').gte('sale_date', from).lt('sale_date', to)
-      .order('sale_date', { ascending: false }).order('created_at', { ascending: false }),
-    sb.from('ad_spend').select('*').gte('spend_date', from).lt('spend_date', to),
-  ]);
-  if (sRes.error) throw sRes.error;
-  if (aRes.error) throw aRes.error;
-  const ad = {};
-  (aRes.data || []).forEach(r => { ad[r.spend_date] = Number(r.amount_dop) || 0; });
-  ownerData = { sales: sRes.data || [], ad };
-  return ownerData;
-}
-
-function adPortionMap(sales, ad) {
-  const counts = {};
-  sales.forEach(s => { counts[s.sale_date] = (counts[s.sale_date] || 0) + 1; });
-  const map = {};
-  Object.keys(counts).forEach(d => {
-    map[d] = (ad[d] || 0) / counts[d];
-  });
-  return map;
-}
-
-function saleCalc(s, portion) {
+function editSale(id) {
+  const s = allSalesCache.find(x => x.id === id) || dashSales.find(x => x.id === id);
+  if (!s) return;
+  editingId = id;
+  showView('registrar');
+  $('sale-date').value = s.sale_date;
+  $('sale-qty').value = s.quantity;
   const p = productById(s.product_id);
-  const seller = sellerById(s.seller_id);
+  $('sale-product').value = p ? String(p.id) : '';
   const cost = p ? Number(p.cost_dop) : 0;
-  const margin = saleMargin(s, cost);
-  const isOwner = seller && seller.role === 'owner';
-  const sellerShare = isOwner ? 0 : margin / 2;
-  const ownerNet = isOwner ? margin - portion : sellerShare - portion;
-  return { p, seller, margin, sellerShare, ownerNet };
+  $('sale-cost').value = cost === 0 ? '' : cost;
+  $('sale-price').value = s.unit_sale_price_dop;
+  $('sale-ship').value = s.shipping_cost_dop;
+  $('sale-desc').value = s.description || '';
+  $('sale-save').textContent = 'Guardar cambios';
+  $('sale-cancel').classList.remove('hidden');
+  updateSummary();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-async function loadOwnerSales() {
-  const list = $('owner-sales-list');
-  $('ow-month-label').textContent = monthLabel(ownerMonth.ym);
-  const filterSel = $('ow-seller-filter');
-  if (!filterSel.dataset.ready) {
-    sellersCache.forEach(s => {
-      const o = document.createElement('option');
-      o.value = s.id;
-      o.textContent = s.name + (s.role === 'owner' ? ' (dueño)' : '');
-      filterSel.appendChild(o);
-    });
-    filterSel.dataset.ready = '1';
-    filterSel.onchange = loadOwnerSales;
-  }
-  list.innerHTML = '<div class="empty">Cargando…</div>';
+async function confirmDelete() {
+  if (!deleteId) return;
   try {
-    const { sales, ad } = await fetchOwnerMonth();
-    const portions = adPortionMap(sales, ad);
-    const f = filterSel.value;
-    const rows = f ? sales.filter(s => s.seller_id === f) : sales;
-    if (!rows.length) {
-      list.innerHTML = '<div class="empty">No hay ventas este mes.</div>';
-      return;
-    }
-    list.innerHTML = rows.map(s => {
-      const c = saleCalc(s, portions[s.sale_date] || 0);
-      const badge = c.seller
-        ? '<span class="badge ' + c.seller.role + '">' + esc(c.seller.name) + '</span>'
-        : '<span class="badge">?</span>';
-      return '<div class="item">' +
-        '<div class="item-head"><span class="item-title">' + esc(c.p ? c.p.name : 'Producto') + '</span>' + badge + '</div>' +
-        '<div class="item-date" style="margin-bottom:6px">' + fmtDate(s.sale_date) + '</div>' +
-        '<div class="item-rows">' +
-        '<span>Cant: <b>' + s.quantity + '</b></span>' +
-        '<span>Precio: <b>' + fmtMoney(s.unit_sale_price_dop) + '</b></span>' +
-        '<span>Envío: <b>' + fmtMoney(s.shipping_cost_dop) + '</b></span>' +
-        '<span>Margen: <b class="' + (c.margin < 0 ? 'neg' : '') + '">' + fmtMoney(c.margin) + '</b></span>' +
-        (c.seller && c.seller.role !== 'owner'
-          ? '<span>Vendedor (50%): <b class="share' + (c.sellerShare < 0 ? ' neg' : '') + '">' + fmtMoney(c.sellerShare) + '</b></span>'
-          : '') +
-        '<span>Neto dueño: <b class="' + (c.ownerNet < 0 ? 'neg' : '') + '">' + fmtMoney(c.ownerNet) + '</b></span>' +
-        '</div></div>';
-    }).join('');
-  } catch (err) {
-    list.innerHTML = '<div class="empty">' + esc(dbError(err)) + '</div>';
-  }
-}
-
-/* ================= Owner: sellers summary ================= */
-const sellersMonth = { ym: todayISO().slice(0, 7) };
-
-async function loadSellersSummary() {
-  $('sl-month-label').textContent = monthLabel(sellersMonth.ym);
-  const box = $('sellers-summary');
-  box.innerHTML = '<div class="empty">Cargando…</div>';
-  try {
-    const saved = ownerMonth.ym;
-    ownerMonth.ym = sellersMonth.ym;
-    const { sales, ad } = await fetchOwnerMonth();
-    ownerMonth.ym = saved;
-    const portions = adPortionMap(sales, ad);
-    const per = {};
-    let adTotal = 0, ownerNetTotal = 0;
-    Object.values(ad).forEach(v => { adTotal += v; });
-    sales.forEach(s => {
-      const c = saleCalc(s, portions[s.sale_date] || 0);
-      const key = s.seller_id;
-      if (!per[key]) per[key] = { name: c.seller ? c.seller.name : '?', role: c.seller ? c.seller.role : '', count: 0, sold: 0, share: 0, net: 0 };
-      per[key].count++;
-      per[key].sold += (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0);
-      per[key].share += c.sellerShare;
-      per[key].net += c.ownerNet;
-      ownerNetTotal += c.ownerNet;
-    });
-    const order = sellersCache.slice().sort((a, b) =>
-      (a.role === 'owner' ? 1 : 0) - (b.role === 'owner' ? 1 : 0));
-    box.innerHTML = order.map(s => {
-      const r = per[s.id] || { count: 0, sold: 0, share: 0, net: 0 };
-      const isOwner = s.role === 'owner';
-      return '<div class="item">' +
-        '<div class="item-head"><span class="item-title">' + esc(s.name) + '</span>' +
-        '<span class="badge ' + s.role + '">' + (isOwner ? 'Dueño' : 'Vendedor') + '</span></div>' +
-        '<div class="item-rows">' +
-        '<span>Ventas: <b>' + r.count + '</b></span>' +
-        '<span>Total vendido: <b>' + fmtMoney(r.sold) + '</b></span>' +
-        (isOwner
-          ? '<span>Neto: <b class="' + (r.net < 0 ? 'neg' : '') + '">' + fmtMoney(r.net) + '</b></span>'
-          : '<span>Su parte (50%): <b class="share' + (r.share < 0 ? ' neg' : '') + '">' + fmtMoney(r.share) + '</b></span>') +
-        '</div></div>';
-    }).join('') || '<div class="empty">Sin vendedores.</div>';
-    $('sl-ad').textContent = fmtMoney(adTotal);
-    $('sl-net').textContent = fmtMoney(ownerNetTotal);
-    $('sl-net').classList.toggle('neg', ownerNetTotal < 0);
-  } catch (err) {
-    box.innerHTML = '<div class="empty">' + esc(dbError(err)) + '</div>';
-  }
-}
-
-/* ================= Owner: ad spend ================= */
-function initAdForm() {
-  if (!$('ad-date').value) $('ad-date').value = todayISO();
-  loadAdList();
-}
-
-async function saveAdSpend() {
-  const errBox = $('ad-error');
-  errBox.classList.add('hidden');
-  const date = $('ad-date').value;
-  const amount = Math.max(0, Number($('ad-amount').value) || 0);
-  if (!date) { errBox.textContent = 'Elige la fecha.'; errBox.classList.remove('hidden'); return; }
-  const btn = $('ad-save');
-  btn.disabled = true;
-  btn.textContent = 'Guardando…';
-  try {
-    const { error } = await sb.from('ad_spend')
-      .upsert({ spend_date: date, amount_dop: amount }, { onConflict: 'spend_date' });
+    const { error } = await sb.from('sales').delete().eq('id', deleteId);
     if (error) throw error;
-    toast('Gasto guardado.');
-    $('ad-amount').value = '';
-    loadAdList();
-  } catch (err) {
-    errBox.textContent = dbError(err, 'No se pudo guardar.');
-    errBox.classList.remove('hidden');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Guardar gasto';
-  }
-}
-
-async function loadAdList() {
-  const list = $('ad-list');
-  list.innerHTML = '<div class="empty">Cargando…</div>';
-  try {
-    const { data, error } = await sb.from('ad_spend').select('*')
-      .order('spend_date', { ascending: false }).limit(30);
-    if (error) throw error;
-    if (!data || !data.length) {
-      list.innerHTML = '<div class="empty">No hay registros.</div>';
-      return;
-    }
-    list.innerHTML = data.map(r =>
-      '<div class="item"><div class="item-head"><span class="item-title">' + fmtDate(r.spend_date) + '</span>' +
-      '<strong>' + fmtMoney(r.amount_dop) + '</strong></div>' +
-      '<div class="item-actions"><button class="btn btn-ghost btn-xs" data-del="' + r.spend_date + '">Eliminar</button></div></div>'
-    ).join('');
-    list.querySelectorAll('[data-del]').forEach(b => b.onclick = () => deleteAdSpend(b.dataset.del));
-  } catch (err) {
-    list.innerHTML = '<div class="empty">' + esc(dbError(err)) + '</div>';
-  }
-}
-
-async function deleteAdSpend(date) {
-  if (!confirm('¿Eliminar el gasto del ' + fmtDate(date) + '?')) return;
-  try {
-    const { error } = await sb.from('ad_spend').delete().eq('spend_date', date);
-    if (error) throw error;
-    toast('Eliminado.');
-    loadAdList();
+    toast('Venta eliminada.');
+    closeModal('modal-del-back');
+    deleteId = null;
+    loadRecent();
+    if (currentView === 'dashboard') loadDashboard();
   } catch (err) {
     toast(dbError(err, 'No se pudo eliminar.'), true);
   }
 }
 
-/* ================= Owner: products ================= */
-function loadProducts() {
-  renderProductList($('prod-search').value || '');
+/* ================= Sale cards ================= */
+let allSalesCache = [];   // recent sales (registrar view)
+
+function adPortionFor(date, salesAll, adMap) {
+  const amt = Number(adMap[date]) || 0;
+  if (amt <= 0) return 0;
+  const n = salesAll.filter(s => s.sale_date === date).length;
+  return n > 0 ? amt / n : 0;
 }
 
-function renderProductList(q) {
-  const query = norm(q.trim());
-  const matches = query
-    ? productsCache.filter(p => norm(p.name).includes(query) || norm(p.reference).includes(query))
-    : productsCache;
-  $('prod-count').textContent = matches.length + ' productos';
-  const slice = matches.slice(0, 120);
-  $('prod-list').innerHTML = slice.length ? slice.map(p =>
-    '<div class="item"><div class="item-head"><span class="item-title">' + esc(p.name) + '</span></div>' +
-    '<div class="item-rows"><span>Ref: <b>' + esc(p.reference || '—') + '</b></span>' +
-    '<span>Costo: <b>' + fmtMoney(p.cost_dop) + '</b></span></div></div>'
-  ).join('') : '<div class="empty">Sin resultados.</div>';
-}
+function saleCardHTML(s, opts) {
+  const p = productById(s.product_id);
+  const bp = badgeParts(s.sale_date);
+  const cost = p ? Number(p.cost_dop) : 0;
+  const venta = (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0);
+  const margin = saleMargin(s, cost);
+  const seller = sellerById(s.seller_id);
+  const qtyTxt = s.quantity + ' × ' + fmtMoney(s.unit_sale_price_dop);
 
-/* ================= Boot ================= */
-document.addEventListener('DOMContentLoaded', async () => {
-  if (SUPABASE_ANON_KEY === 'sb_publishable_WCyNNOLe4jegZGRbJ6oNPQ_1aBy7mWz') {
-    console.warn('Falta configurar la publishable key de Supabase.');
+  let nums;
+  if (isOwner()) {
+    const adP = opts.adPortion || 0;
+    const isOwn = s.seller_id === profile.id;
+    const mid = isOwn ? margin : margin / 2;
+    const net = mid - adP;
+    nums =
+      '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div>' +
+      '<div class="sn-label" style="margin-top:8px">Publicidad asignada</div><div class="sn-value">−' + fmtMoney(adP) + '</div></div>' +
+      '<div style="text-align:right"><div class="sn-label">' + (isOwn ? 'Ganancia' : 'Antes de anuncios') + '</div><div class="sn-value">' + fmtMoney(mid) + '</div>' +
+      '<div class="sn-label" style="margin-top:8px">Ganancia neta</div><div class="sn-value green">' + fmtMoney(net) + '</div></div>';
+  } else {
+    nums =
+      '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div></div>' +
+      '<div style="text-align:right"><div class="sn-label">Tu parte (50%)</div><div class="sn-value green">' + fmtMoney(margin / 2) + '</div></div>';
   }
-  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+  return '<div class="sale-card">' +
+    '<div class="sale-top">' +
+      '<div class="date-badge"><div class="d">' + bp.d + '</div><div class="m">' + bp.m + '</div></div>' +
+      '<div class="sale-info">' +
+        '<div class="sale-name">' + esc(p ? p.name : 'Producto') + '</div>' +
+        '<div class="sale-sub">' + esc(qtyTxt) + '</div>' +
+        (s.description ? '<div class="sale-desc">' + esc(s.description) + '</div>' : '') +
+        (isOwner() && seller ? '<span class="seller-badge">' + esc(seller.name) + '</span>' : '') +
+        '<div class="sale-links">' +
+          '<button class="link-dim" data-edit="' + s.id + '">Editar</button>' +
+          '<button class="link-dim" data-del="' + s.id + '">Eliminar</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="sale-nums">' + nums + '</div>' +
+  '</div>';
+}
+
+function bindSaleCardButtons(container) {
+  container.querySelectorAll('[data-edit]').forEach(b =>
+    b.onclick = () => editSale(Number(b.dataset.edit)));
+  container.querySelectorAll('[data-del]').forEach(b =>
+    b.onclick = () => { deleteId = Number(b.dataset.del); openModal('modal-del-back'); });
+}
+
+async function loadRecent() {
+  const box = $('recent-sales');
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  try {
+    let q = sb.from('sales').select('*').order('sale_date', { ascending: false })
+      .order('created_at', { ascending: false }).limit(10);
+    if (!isOwner()) q = q.eq('seller_id', profile.id);
+    const { data, error } = await q;
+    if (error) throw error;
+    allSalesCache = data || [];
+    // ad portions for owner
+    let adMap = {};
+    if (isOwner() && allSalesCache.length) {
+      const dates = [...new Set(allSalesCache.map(s => s.sale_date))];
+      const { data: ads } = await sb.from('ad_spend').select('spend_date,amount_dop')
+        .in('spend_date', dates);
+      const { data: allDay } = await sb.from('sales').select('sale_date').in('sale_date', dates);
+      (ads || []).forEach(a => adMap[a.spend_date] = Number(a.amount_dop));
+      var dayCounts = {};
+      (allDay || []).forEach(s => dayCounts[s.sale_date] = (dayCounts[s.sale_date] || 0) + 1);
+    }
+    if (!allSalesCache.length) { box.innerHTML = '<div class="empty">Sin ventas todavía.</div>'; return; }
+    box.innerHTML = allSalesCache.map(s => {
+      let adP = 0;
+      if (isOwner()) {
+        const amt = Number(adMap[s.sale_date]) || 0;
+        const n = dayCounts[s.sale_date] || 1;
+        adP = amt / n;
+      }
+      return saleCardHTML(s, { adPortion: adP });
+    }).join('');
+    bindSaleCardButtons(box);
+  } catch (err) {
+    box.innerHTML = '<div class="empty">No se pudieron cargar las ventas.</div>';
+  }
+}
+
+/* ================= Dashboard ================= */
+function dashQuery() {
+  const { from, to } = periodRange();
+  let q = sb.from('sales').select('*')
+    .gte('sale_date', from).order('sale_date', { ascending: false })
+    .order('created_at', { ascending: false });
+  if (periodMode !== 'year') q = q.lt('sale_date', to);
+  else q = q.lte('sale_date', to);
+  if (!isOwner()) q = q.eq('seller_id', profile.id);
+  return q;
+}
+
+async function loadDashboard() {
+  const { from, to } = periodRange();
+  $('period-tag').textContent = periodMode === 'day' ? refDateISO :
+    periodMode === 'year' ? refDateISO.slice(0, 4) : refDateISO.slice(0, 7);
+  $('analysis-tag').textContent = $('period-tag').textContent;
+  $('chart-eyebrow').textContent = periodMode === 'day' ? 'Por hora' :
+    periodMode === 'year' ? 'Por mes' : 'Por día';
+  try {
+    const { data: sales, error } = await dashQuery();
+    if (error) throw error;
+    dashSales = sales || [];
+    dashAd = {};
+    if (isOwner()) {
+      let aq = sb.from('ad_spend').select('spend_date,amount_dop').gte('spend_date', from);
+      aq = periodMode === 'year' ? aq.lte('spend_date', to) : aq.lt('spend_date', to);
+      const { data: ads } = await aq;
+      (ads || []).forEach(a => dashAd[a.spend_date] = Number(a.amount_dop));
+    }
+    renderStats();
+    renderChart();
+    renderTopProducts();
+    renderAnalysis();
+    if (isOwner()) { renderAdDays(); }
+    renderHistory();
+  } catch (err) {
+    toast(dbError(err, 'No se pudo cargar el panel.'), true);
+  }
+}
+
+function adPortionMap() {
+  const counts = {};
+  dashSales.forEach(s => counts[s.sale_date] = (counts[s.sale_date] || 0) + 1);
+  const map = {};
+  Object.keys(dashAd).forEach(d => {
+    const n = counts[d] || 0;
+    map[d] = n > 0 ? dashAd[d] / n : 0;
+  });
+  return map;
+}
+
+function renderStats() {
+  const row = $('stats-row');
+  const n = dashSales.length;
+  const ventas = dashSales.reduce((a, s) => a + (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0), 0);
+  const units = dashSales.reduce((a, s) => a + (Number(s.quantity) || 0), 0);
+  if (isOwner()) {
+    const costo = dashSales.reduce((a, s) => {
+      const p = productById(s.product_id);
+      return a + (Number(s.quantity) || 0) * (p ? Number(p.cost_dop) : 0);
+    }, 0);
+    const envios = dashSales.reduce((a, s) => a + (Number(s.shipping_cost_dop) || 0), 0);
+    const adMap = adPortionMap();
+    const adTotal = Object.keys(dashAd).reduce((a, d) => a + dashAd[d], 0);
+    const adAssigned = dashSales.reduce((a, s) => a + (adMap[s.sale_date] || 0), 0);
+    const adUnassigned = adTotal - adAssigned;
+    let net = 0;
+    dashSales.forEach(s => {
+      const p = productById(s.product_id);
+      const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
+      const mid = s.seller_id === profile.id ? m : m / 2;
+      net += mid - (adMap[s.sale_date] || 0);
+    });
+    const marginPct = ventas > 0 ? (net / ventas * 100) : 0;
+    row.innerHTML =
+      statHTML('Ventas', fmtMoney(ventas), n + ' ventas · ' + units + ' unidades') +
+      statHTML('Costo productos', fmtMoney(costo), '') +
+      statHTML('Envíos', fmtMoney(envios), '') +
+      statHTML('Publicidad', fmtMoney(adTotal), fmtMoney(adUnassigned) + ' en días sin ventas') +
+      statHTML('Ganancia neta', (net < 0 ? '−' : '') + fmtMoney(Math.abs(net)),
+        'Margen ' + marginPct.toFixed(1) + '%', net < 0 ? 'red' : '');
+  } else {
+    let share = 0;
+    dashSales.forEach(s => {
+      const p = productById(s.product_id);
+      share += saleMargin(s, p ? Number(p.cost_dop) : 0) / 2;
+    });
+    row.innerHTML =
+      statHTML('Ventas', fmtMoney(ventas), n + ' ventas · ' + units + ' unidades') +
+      statHTML('Mi parte (50%)', fmtMoney(share), '', 'green') +
+      statHTML('N.º ventas', String(n), '');
+  }
+}
+function statHTML(label, value, sub, cls) {
+  return '<div class="stat"><div class="s-label">' + label + '</div>' +
+    '<div class="s-value' + (cls ? ' ' + cls : '') + '">' + value + '</div>' +
+    (sub ? '<div class="s-sub">' + sub + '</div>' : '') + '</div>';
+}
+
+function renderChart() {
+  const box = $('chart');
+  const W = 640, H = 300, PL = 44, PB = 30, PT = 8;
+  const buckets = [];
+  if (periodMode === 'day') {
+    buckets.push({ label: refDateISO.slice(8, 10), total: periodTotal(s => s.sale_date === refDateISO) });
+  } else if (periodMode === 'year') {
+    const y = refDateISO.slice(0, 4);
+    for (let m = 1; m <= 12; m++) {
+      const ym = y + '-' + String(m).padStart(2, '0');
+      buckets.push({ label: MESES[m - 1], total: periodTotal(s => s.sale_date.slice(0, 7) === ym) });
+    }
+  } else {
+    const ym = refDateISO.slice(0, 7);
+    const dim = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
+    for (let d = 1; d <= dim; d++) {
+      const dt = ym + '-' + String(d).padStart(2, '0');
+      const t = periodTotal(s => s.sale_date === dt);
+      if (t > 0 || dim <= 31) buckets.push({ label: String(d), total: t, show: t > 0 });
+    }
+  }
+  const shown = buckets.filter(b => b.show !== false);
+  const max = Math.max(1, ...shown.map(b => b.total));
+  const step = niceStep(max);
+  const yMax = Math.ceil(max / step) * step;
+  const iw = W - PL - 8, ih = H - PT - PB;
+  const bw = Math.min(120, (iw / Math.max(1, shown.length)) * 0.55);
+  let svg = '<svg class="bar-chart" viewBox="0 0 ' + W + ' ' + H + '">';
+  for (let v = 0; v <= yMax; v += step) {
+    const y = PT + ih - (v / yMax) * ih;
+    svg += '<line x1="' + PL + '" y1="' + y + '" x2="' + W + '" y2="' + y + '" stroke="#1a222c" stroke-width="1"/>' +
+      '<text x="' + (PL - 8) + '" y="' + (y + 4) + '" fill="#5d6672" font-size="11" text-anchor="end">' +
+      (v >= 1000 ? (v / 1000) + ' K' : v) + '</text>';
+  }
+  shown.forEach((b, i) => {
+    const h = (b.total / yMax) * ih;
+    const x = PL + (iw / shown.length) * i + ((iw / shown.length) - bw) / 2;
+    const y = PT + ih - h;
+    svg += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
+      '" height="' + Math.max(0, h).toFixed(1) + '" rx="5" fill="#22c55e"/>';
+    if (shown.length <= 31) {
+      svg += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) + '" fill="#5d6672" font-size="11" text-anchor="middle">' + b.label + '</text>';
+    }
+  });
+  svg += '</svg>';
+  box.innerHTML = svg;
+}
+function periodTotal(fn) {
+  return dashSales.filter(fn).reduce((a, s) =>
+    a + (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0), 0);
+}
+function niceStep(max) {
+  const raw = max / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  return (n >= 5 ? 5 : n >= 2 ? 2 : 1) * mag;
+}
+
+function renderTopProducts() {
+  const box = $('top-products');
+  const agg = {};
+  dashSales.forEach(s => {
+    const p = productById(s.product_id);
+    const key = s.product_id;
+    if (!agg[key]) agg[key] = { name: p ? p.name : 'Producto', units: 0, total: 0 };
+    agg[key].units += Number(s.quantity) || 0;
+    agg[key].total += (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0);
+  });
+  const rows = Object.values(agg).sort((a, b) => b.units - a.units).slice(0, 8);
+  if (!rows.length) { box.innerHTML = '<div class="empty">Sin ventas en el período.</div>'; return; }
+  box.innerHTML = rows.map((r, i) =>
+    '<div class="rank-row"><span class="rk">' + String(i + 1).padStart(2, '0') + '</span>' +
+    '<div class="rn"><div class="t">' + esc(r.name) + '</div>' +
+    '<div class="s">' + fmtMoney(r.total) + ' en ventas</div></div>' +
+    '<span class="rc">' + r.units + '</span></div>'
+  ).join('');
+}
+
+function renderAnalysis() {
+  const tb = $('analysis-table').querySelector('tbody');
+  $('analysis-net-head').textContent = isOwner() ? 'Ganancia neta' : 'Mi parte';
+  const adMap = isOwner() ? adPortionMap() : {};
+  const agg = {};
+  dashSales.forEach(s => {
+    const p = productById(s.product_id);
+    const key = analysisTab === 'item' ? s.product_id : (p ? (p.category || 'Sin categoría') : 'Sin categoría');
+    if (!agg[key]) agg[key] = {
+      name: analysisTab === 'item' ? (p ? p.name : 'Producto') : key,
+      sub: analysisTab === 'item' ? (p ? (p.category || '') : '') : '',
+      units: 0, ingresos: 0, net: 0
+    };
+    const qty = Number(s.quantity) || 0;
+    const ing = qty * (Number(s.unit_sale_price_dop) || 0);
+    const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
+    let net;
+    if (isOwner()) {
+      const mid = s.seller_id === profile.id ? m : m / 2;
+      net = mid - (adMap[s.sale_date] || 0);
+    } else {
+      net = m / 2;
+    }
+    agg[key].units += qty; agg[key].ingresos += ing; agg[key].net += net;
+  });
+  const rows = Object.values(agg).sort((a, b) => b.ingresos - a.ingresos);
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="4" class="empty">Sin ventas en el período.</td></tr>'; return; }
+  tb.innerHTML = rows.map(r =>
+    '<tr><td><div style="font-weight:700">' + esc(r.name) + '</div>' +
+    (r.sub ? '<div class="sub">' + esc(r.sub) + '</div>' : '') + '</td>' +
+    '<td class="num">' + r.units + '</td>' +
+    '<td class="num">' + fmtMoney(r.ingresos) + '</td>' +
+    '<td class="num green">' + fmtMoney(r.net) + '</td></tr>'
+  ).join('');
+}
+
+function renderAdDays() {
+  const box = $('ad-days-list');
+  const counts = {};
+  dashSales.forEach(s => counts[s.sale_date] = (counts[s.sale_date] || 0) + 1);
+  const rows = Object.keys(dashAd)
+    .filter(d => !counts[d])
+    .sort()
+    .map(d => ({ date: d, amt: dashAd[d] }));
+  const total = rows.reduce((a, r) => a + r.amt, 0);
+  $('ad-unassigned').textContent = fmtMoney(total) + ' sin asignar';
+  if (!rows.length) { box.innerHTML = '<div class="empty">Todo el gasto está asignado a días con ventas.</div>'; return; }
+  box.innerHTML = rows.map(r =>
+    '<div class="ad-row"><div><div class="ad-date">' + fmtLong(r.date) + '</div>' +
+    '<div class="ad-src">Manual</div></div>' +
+    '<div class="ad-amt">' + fmtMoney(r.amt) +
+    '<span class="ad-warn">Sin ventas · gasto conservado en el día</span></div></div>'
+  ).join('');
+}
+
+function renderHistory() {
+  const box = $('history-list');
+  if (!dashSales.length) { box.innerHTML = '<div class="empty">Sin ventas en el período.</div>'; return; }
+  const adMap = isOwner() ? adPortionMap() : {};
+  box.innerHTML = dashSales.map(s =>
+    saleCardHTML(s, { adPortion: adMap[s.sale_date] || 0 })).join('');
+  bindSaleCardButtons(box);
+}
+
+/* ================= Modals ================= */
+function openModal(id) { $(id).classList.remove('hidden'); }
+function closeModal(id) { $(id).classList.add('hidden'); }
+
+async function saveAd() {
+  const errBox = $('ad-error');
+  errBox.classList.add('hidden');
+  const date = $('ad-date').value;
+  const amt = Math.max(0, Number($('ad-amount').value) || 0);
+  if (!date) { errBox.textContent = 'Elige la fecha.'; errBox.classList.remove('hidden'); return; }
+  const btn = $('ad-save');
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  try {
+    const { error } = await sb.from('ad_spend')
+      .upsert({ spend_date: date, amount_dop: amt }, { onConflict: 'spend_date' });
+    if (error) throw error;
+    closeModal('modal-ad-back');
+    $('ad-amount').value = '';
+    toast('Publicidad registrada.');
+    if (currentView === 'dashboard') loadDashboard();
+  } catch (err) {
+    errBox.textContent = dbError(err, 'No se pudo guardar.');
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar';
+  }
+}
+
+/* ================= Bindings ================= */
+function bindAll() {
   $('login-form').addEventListener('submit', handleLogin);
-  $('logout-btn').onclick = logout;
+
+  $('nav-registrar').onclick = () => showView('registrar');
+  $('nav-dashboard').onclick = () => showView('dashboard');
+  $('btn-ver-panel').onclick = () => showView('dashboard');
+
+  const doLogout = () => logout();
+  $('btn-logout').onclick = doLogout;
+  $('btn-logout-2').onclick = doLogout;
+
+  const openPass = () => { $('pass-error').classList.add('hidden'); openModal('modal-pass-back'); };
+  $('btn-change-pass').onclick = openPass;
+  $('btn-change-pass-2').onclick = openPass;
+  $('pass-cancel').onclick = () => closeModal('modal-pass-back');
+  $('pass-save').onclick = changePassword;
+
+  const refresh = () => {
+    if (currentView === 'dashboard') loadDashboard();
+    else { resetSaleForm(); loadRecent(); }
+    toast('Actualizado.');
+  };
+  $('btn-refresh-sources').onclick = refresh;
+  $('btn-refresh-all').onclick = refresh;
+
+  // ad modal
+  const openAd = () => {
+    $('ad-error').classList.add('hidden');
+    if (!$('ad-date').value) $('ad-date').value = todayISO();
+    openModal('modal-ad-back');
+  };
+  $('btn-reg-publicidad').onclick = openAd;
+  $('btn-consultar-meta').onclick = openAd;
+  $('ad-cancel').onclick = () => closeModal('modal-ad-back');
+  $('ad-save').onclick = saveAd;
+
+  // delete modal
+  $('del-cancel').onclick = () => { deleteId = null; closeModal('modal-del-back'); };
+  $('del-confirm').onclick = confirmDelete;
+
+  // close modals on backdrop click
+  document.querySelectorAll('.modal-back').forEach(m =>
+    m.addEventListener('click', e => { if (e.target === m) m.classList.add('hidden'); }));
+
+  // dashboard filters
+  $('period-pills').querySelectorAll('.pill').forEach(p =>
+    p.onclick = () => {
+      $('period-pills').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      periodMode = p.dataset.p;
+      loadDashboard();
+    });
+  $('ref-date').addEventListener('change', () => {
+    if ($('ref-date').value) { refDateISO = $('ref-date').value; loadDashboard(); }
+  });
+  $('analysis-tabs').querySelectorAll('.pill').forEach(p =>
+    p.onclick = () => {
+      $('analysis-tabs').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      analysisTab = p.dataset.t;
+      renderAnalysis();
+    });
 
   bindSaleForm();
-  $('ad-save').onclick = saveAdSpend;
+}
 
-  $('mv-prev').onclick = () => { mySalesMonth.ym = shiftMonth(mySalesMonth.ym, -1); loadMySales(); };
-  $('mv-next').onclick = () => { mySalesMonth.ym = shiftMonth(mySalesMonth.ym, 1); loadMySales(); };
-  $('rs-prev').onclick = () => { mySummaryMonth.ym = shiftMonth(mySummaryMonth.ym, -1); loadMySummary(); };
-  $('rs-next').onclick = () => { mySummaryMonth.ym = shiftMonth(mySummaryMonth.ym, 1); loadMySummary(); };
-  $('ow-prev').onclick = () => { ownerMonth.ym = shiftMonth(ownerMonth.ym, -1); loadOwnerSales(); };
-  $('ow-next').onclick = () => { ownerMonth.ym = shiftMonth(ownerMonth.ym, 1); loadOwnerSales(); };
-  $('sl-prev').onclick = () => { sellersMonth.ym = shiftMonth(sellersMonth.ym, -1); loadSellersSummary(); };
-  $('sl-next').onclick = () => { sellersMonth.ym = shiftMonth(sellersMonth.ym, 1); loadSellersSummary(); };
-  $('prod-search').addEventListener('input', e => renderProductList(e.target.value));
-
+/* ================= Init ================= */
+(async function init() {
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  bindAll();
+  $('ref-date').value = refDateISO;
   try {
     if (await restoreSession()) await enterApp();
   } catch (err) {
     console.error(err);
   }
-});
+})();

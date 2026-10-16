@@ -7,181 +7,287 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="app">
 
-  <!-- ============ LOGIN ============ -->
-  <section id="view-login" class="view">
-    <div class="login-wrap">
-      <div class="brand">
-        <div class="brand-mark">KX</div>
-        <h1>FINANZAS <span>KODEX</span></h1>
-        <p class="brand-sub">Control de ventas</p>
-      </div>
-      <form id="login-form" autocomplete="off">
-        <label class="field">
-          <span>Usuario</span>
-          <input type="text" id="login-user" placeholder="tu usuario" autocomplete="username" required>
-        </label>
-        <label class="field">
-          <span>Contraseña</span>
-          <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password" required>
-        </label>
-        <p id="login-error" class="error hidden"></p>
-        <button type="submit" id="login-btn" class="btn btn-primary btn-block">Entrar</button>
-      </form>
+<!-- ============ LOGIN ============ -->
+<div id="view-login" class="login-screen">
+  <div class="login-card">
+    <div class="eyebrow">Acceso privado</div>
+    <h1>Inicia sesión</h1>
+    <p class="desc">Escribe tu nombre de usuario y contraseña para ver y registrar las finanzas.</p>
+    <form id="login-form" autocomplete="off">
+      <label class="field">
+        <span>Nombre de usuario</span>
+        <input type="text" id="login-user" autocomplete="username" required>
+      </label>
+      <label class="field">
+        <span>Contraseña</span>
+        <input type="password" id="login-pass" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="error hidden"></p>
+      <button type="submit" id="login-btn" class="btn btn-primary btn-block">Entrar</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="view-main" class="hidden">
+  <header class="topbar">
+    <span class="logo-mark"></span>
+    <span class="logo-name">Finanzas KODEX</span>
+    <span class="spacer"></span>
+    <span class="topbar-user" id="topbar-user"></span>
+  </header>
+
+  <nav class="sidebar">
+    <button class="nav-btn active" id="nav-registrar">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      <span>Registrar</span>
+    </button>
+    <button class="nav-btn" id="nav-dashboard">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>
+      <span>Dashboard</span>
+    </button>
+  </nav>
+
+  <main class="main">
+    <div class="wrap">
+
+      <!-- ===== REGISTRAR ===== -->
+      <section id="view-registrar">
+        <div class="view-head">
+          <div class="eyebrow" id="reg-date-label"></div>
+          <h1 class="title">Registrar venta</h1>
+          <div class="head-actions">
+            <button class="link-green hidden" id="btn-refresh-sources">Actualizar fuentes</button>
+            <button class="link-green" id="btn-change-pass">Cambiar contraseña</button>
+            <button class="link-red" id="btn-logout">Cerrar sesión</button>
+          </div>
+        </div>
+
+        <div class="reg-grid">
+          <div>
+            <div class="card accent-top">
+              <div class="row2">
+                <label class="field">
+                  <span>Fecha</span>
+                  <input type="date" id="sale-date">
+                </label>
+                <label class="field">
+                  <span>Cantidad</span>
+                  <input type="number" id="sale-qty" value="1" min="1" step="1" inputmode="numeric">
+                </label>
+              </div>
+              <label class="field">
+                <span>Buscar producto</span>
+                <div class="ac-wrap">
+                  <input type="text" id="sale-search" placeholder="Modelo, referencia o marca" autocomplete="off">
+                  <div id="ac-results" class="ac-results hidden"></div>
+                </div>
+              </label>
+              <label class="field">
+                <span>Producto</span>
+                <select id="sale-product">
+                  <option value="">Selecciona un producto</option>
+                </select>
+              </label>
+              <div class="row2">
+                <label class="field">
+                  <span>Costo Omega (RD$)</span>
+                  <input type="number" id="sale-cost" placeholder="Pendiente" min="0" step="0.01" inputmode="decimal">
+                </label>
+                <label class="field">
+                  <span>Precio de venta (RD$)</span>
+                  <input type="number" id="sale-price" placeholder="0.00" min="0" step="1" inputmode="decimal">
+                </label>
+              </div>
+              <label class="field">
+                <span>Envío (RD$)</span>
+                <input type="number" id="sale-ship" value="0" min="0" step="1" inputmode="decimal">
+              </label>
+              <label class="field">
+                <span>Descripción o nota</span>
+                <textarea id="sale-desc" placeholder="Cliente, condición especial o detalle de la venta" maxlength="300"></textarea>
+              </label>
+              <div class="summary-strip" id="sale-summary">
+                <div><div class="ss-label">Venta</div><div class="ss-value" id="ss-venta">RD$0</div></div>
+                <div><div class="ss-label" id="ss-mid-label">Ganancia antes de anuncios</div><div class="ss-value green" id="ss-mid">RD$0</div></div>
+                <div><div class="ss-label">Margen</div><div class="ss-value" id="ss-margen">0.0%</div></div>
+              </div>
+              <p id="sale-error" class="error hidden"></p>
+              <div class="form-actions">
+                <button class="btn btn-secondary hidden" id="sale-cancel">Cancelar</button>
+                <button class="btn btn-primary" id="sale-save">Registrar venta</button>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">Movimiento reciente</div>
+                <div class="card-title">Últimas ventas</div>
+              </div>
+              <button class="link-green" id="btn-ver-panel">Ver panel</button>
+            </div>
+            <div id="recent-sales"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== DASHBOARD ===== -->
+      <section id="view-dashboard" class="hidden">
+        <div class="view-head">
+          <div class="eyebrow">Control operativo</div>
+          <h1 class="title">Dashboard financiero</h1>
+          <div class="head-actions">
+            <button class="link-green hidden" id="btn-refresh-all">Actualizar todo</button>
+            <button class="link-green" id="btn-change-pass-2">Cambiar contraseña</button>
+            <button class="link-red" id="btn-logout-2">Cerrar sesión</button>
+          </div>
+        </div>
+
+        <div class="card filter-card">
+          <div class="pills" id="period-pills">
+            <button class="pill" data-p="day">Día</button>
+            <button class="pill active" data-p="month">Mes</button>
+            <button class="pill" data-p="year">Año</button>
+          </div>
+          <label class="field">
+            <span>Fecha de referencia</span>
+            <input type="date" id="ref-date">
+          </label>
+          <span class="period-tag" id="period-tag"></span>
+        </div>
+
+        <div class="stats-row" id="stats-row"></div>
+
+        <div class="dash-grid">
+          <div class="card">
+            <div class="chart-head">
+              <div>
+                <div class="eyebrow" id="chart-eyebrow">Por día</div>
+                <div class="card-title">Ventas del período</div>
+              </div>
+              <span class="unit">RD$</span>
+            </div>
+            <div id="chart"></div>
+          </div>
+          <div class="card">
+            <div class="eyebrow">Unidades vendidas</div>
+            <div class="card-title">Productos más vendidos</div>
+            <div id="top-products" style="margin-top:8px"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">Respeta el filtro de mes</div>
+              <div class="card-title">Análisis de ventas</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px">
+              <span class="muted" id="analysis-tag"></span>
+              <div class="tabs" id="analysis-tabs">
+                <button class="pill active" data-t="item">Por artículo</button>
+                <button class="pill" data-t="cat">Por categoría</button>
+              </div>
+            </div>
+          </div>
+          <div style="overflow-x:auto">
+          <table class="data" id="analysis-table">
+            <thead><tr>
+              <th>Artículo</th><th class="num">Unidades</th><th class="num">Ingresos</th><th class="num" id="analysis-net-head">Ganancia neta</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+          </div>
+        </div>
+
+        <div class="card hidden" id="card-ad-days">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">Gasto pendiente de asignar</div>
+              <div class="card-title">Publicidad en días sin ventas</div>
+            </div>
+            <span class="muted" id="ad-unassigned"></span>
+          </div>
+          <div id="ad-days-list"></div>
+        </div>
+
+        <div class="card hidden" id="card-sources">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">Costos y anuncios</div>
+              <div class="card-title">Fuentes automáticas</div>
+            </div>
+            <button class="link-green" id="btn-reg-publicidad">Registrar publicidad</button>
+          </div>
+          <div class="src-row">
+            <div><div class="st">Catálogo KODEX</div><div class="sd">Actualiza las fuentes para comenzar.</div></div>
+            <span class="ss">Sin sincronizar</span>
+          </div>
+          <div class="src-row">
+            <div><div class="st">Costos Omega</div><div class="sd" id="omega-desc">Costos cargados desde el catálogo.</div></div>
+            <span class="ss ok">Actualizado</span>
+          </div>
+          <div class="src-row">
+            <div><div class="st">Publicidad Meta</div><div class="sd">Conecta Meta o registra el gasto manualmente.</div></div>
+            <span class="ss">Sin sincronizar</span>
+          </div>
+          <div style="margin-top:10px"><button class="link-green" id="btn-consultar-meta">Consultar Meta</button></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">Historial consultable</div>
+              <div class="card-title">Ventas del período</div>
+            </div>
+            <span class="muted">No se elimina automáticamente</span>
+          </div>
+          <div id="history-list"></div>
+        </div>
+      </section>
+
     </div>
-  </section>
+  </main>
+</div>
 
-  <!-- ============ APP ============ -->
-  <div id="view-main" class="view hidden">
-    <header class="topbar">
-      <div class="topbar-id">
-        <div class="brand-mark sm">KX</div>
-        <div>
-          <div class="topbar-name" id="user-name">—</div>
-          <div class="topbar-role" id="user-role">—</div>
-        </div>
-      </div>
-      <button id="logout-btn" class="btn btn-ghost">Salir</button>
-    </header>
+<!-- ============ MODALS ============ -->
+<div class="modal-back hidden" id="modal-ad-back">
+  <div class="modal">
+    <h2>Registrar publicidad</h2>
+    <label class="field"><span>Fecha</span><input type="date" id="ad-date"></label>
+    <label class="field"><span>Monto (RD$)</span><input type="number" id="ad-amount" min="0" step="1" placeholder="0" inputmode="decimal"></label>
+    <p id="ad-error" class="error hidden"></p>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="ad-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="ad-save">Guardar</button>
+    </div>
+  </div>
+</div>
 
-    <main id="main-content">
-      <!-- Vendedor -->
-      <section id="tab-registrar" class="tab hidden">
-        <h2>Registrar venta</h2>
-        <div class="card">
-          <label class="field">
-            <span>Producto</span>
-            <input type="text" id="sale-product-search" placeholder="Buscar producto…" autocomplete="off">
-            <div id="product-results" class="autocomplete hidden"></div>
-          </label>
-          <div id="product-selected" class="selected-product hidden">
-            <div class="sp-name" id="sp-name"></div>
-            <div class="sp-cost">Costo: <strong id="sp-cost"></strong></div>
-            <button type="button" id="product-clear" class="btn btn-ghost btn-xs">Cambiar</button>
-          </div>
-          <div class="row2">
-            <label class="field">
-              <span>Cantidad</span>
-              <input type="number" id="sale-qty" value="1" min="1" step="1" inputmode="numeric">
-            </label>
-            <label class="field">
-              <span>Precio de venta (RD$)</span>
-              <input type="number" id="sale-price" placeholder="0" min="0" step="1" inputmode="decimal">
-            </label>
-          </div>
-          <div class="row2">
-            <label class="field">
-              <span>Envío (RD$)</span>
-              <input type="number" id="sale-ship" value="0" min="0" step="1" inputmode="decimal">
-            </label>
-            <label class="field">
-              <span>Fecha</span>
-              <input type="date" id="sale-date">
-            </label>
-          </div>
-          <label class="field">
-            <span>Descripción (opcional)</span>
-            <input type="text" id="sale-desc" placeholder="Nota…" maxlength="200">
-          </label>
-          <div id="sale-preview" class="preview">
-            <span>Tu parte (50%)</span>
-            <strong id="sale-preview-value">—</strong>
-          </div>
-          <p id="sale-error" class="error hidden"></p>
-          <button id="sale-save" class="btn btn-primary btn-block">Guardar venta</button>
-        </div>
-      </section>
+<div class="modal-back hidden" id="modal-pass-back">
+  <div class="modal">
+    <h2>Cambiar contraseña</h2>
+    <label class="field"><span>Nueva contraseña</span><input type="password" id="new-pass" autocomplete="new-password"></label>
+    <label class="field"><span>Repetir nueva contraseña</span><input type="password" id="new-pass2" autocomplete="new-password"></label>
+    <p id="pass-error" class="error hidden"></p>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="pass-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="pass-save">Guardar</button>
+    </div>
+  </div>
+</div>
 
-      <section id="tab-misventas" class="tab hidden">
-        <h2>Mis ventas</h2>
-        <div class="month-nav">
-          <button id="mv-prev" class="btn btn-ghost">‹</button>
-          <span id="mv-month-label"></span>
-          <button id="mv-next" class="btn btn-ghost">›</button>
-        </div>
-        <div id="my-sales-list" class="list"></div>
-      </section>
-
-      <section id="tab-resumen" class="tab hidden">
-        <h2>Mi resumen</h2>
-        <div class="month-nav">
-          <button id="rs-prev" class="btn btn-ghost">‹</button>
-          <span id="rs-month-label"></span>
-          <button id="rs-next" class="btn btn-ghost">›</button>
-        </div>
-        <div class="stats">
-          <div class="stat card"><span class="stat-label">Total vendido</span><strong id="rs-total" class="stat-value">—</strong></div>
-          <div class="stat card"><span class="stat-label">Mi parte (50%)</span><strong id="rs-share" class="stat-value accent">—</strong></div>
-          <div class="stat card"><span class="stat-label">Ventas</span><strong id="rs-count" class="stat-value">—</strong></div>
-        </div>
-      </section>
-
-      <!-- Dueño -->
-      <section id="tab-ventas" class="tab hidden">
-        <h2>Ventas</h2>
-        <div class="filters card">
-          <div class="month-nav">
-            <button id="ow-prev" class="btn btn-ghost">‹</button>
-            <span id="ow-month-label"></span>
-            <button id="ow-next" class="btn btn-ghost">›</button>
-          </div>
-          <label class="field">
-            <span>Vendedor</span>
-            <select id="ow-seller-filter">
-              <option value="">Todos</option>
-            </select>
-          </label>
-        </div>
-        <div id="owner-sales-list" class="list"></div>
-      </section>
-
-      <section id="tab-vendedores" class="tab hidden">
-        <h2>Vendedores</h2>
-        <div class="month-nav">
-          <button id="sl-prev" class="btn btn-ghost">‹</button>
-          <span id="sl-month-label"></span>
-          <button id="sl-next" class="btn btn-ghost">›</button>
-        </div>
-        <div id="sellers-summary" class="list"></div>
-        <div class="card" id="owner-net-card">
-          <div class="kv"><span>Publicidad del mes</span><strong id="sl-ad"></strong></div>
-          <div class="kv total"><span>Mi neto total (dueño)</span><strong id="sl-net" class="accent"></strong></div>
-        </div>
-      </section>
-
-      <section id="tab-publicidad" class="tab hidden">
-        <h2>Publicidad</h2>
-        <div class="card">
-          <div class="row2">
-            <label class="field">
-              <span>Fecha</span>
-              <input type="date" id="ad-date">
-            </label>
-            <label class="field">
-              <span>Monto (RD$)</span>
-              <input type="number" id="ad-amount" placeholder="0" min="0" step="1" inputmode="decimal">
-            </label>
-          </div>
-          <p id="ad-error" class="error hidden"></p>
-          <button id="ad-save" class="btn btn-primary btn-block">Guardar gasto</button>
-        </div>
-        <h3>Últimos registros</h3>
-        <div id="ad-list" class="list"></div>
-      </section>
-
-      <section id="tab-productos" class="tab hidden">
-        <h2>Productos</h2>
-        <label class="field">
-          <span>Buscar</span>
-          <input type="text" id="prod-search" placeholder="Nombre o referencia…" autocomplete="off">
-        </label>
-        <div id="prod-count" class="muted"></div>
-        <div id="prod-list" class="list"></div>
-      </section>
-    </main>
-
-    <nav id="bottomnav" class="bottomnav"></nav>
+<div class="modal-back hidden" id="modal-del-back">
+  <div class="modal">
+    <h2>Eliminar venta</h2>
+    <p class="card-sub" style="margin-bottom:6px">¿Eliminar esta venta? Esta acción no se puede deshacer.</p>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="del-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="del-confirm" style="background:var(--red);color:#fff">Eliminar</button>
+    </div>
   </div>
 </div>
 
