@@ -419,7 +419,7 @@ function saleCardHTML(s, opts) {
       '<div style="text-align:right"><div class="sn-label">Tu parte (50%)</div><div class="sn-value green">' + fmtMoney(margin / 2) + '</div></div>';
   }
 
-  return '<div class="sale-card">' +
+  return '<div class="sale-card' + ((!isOwner() && s.paid) ? ' paid-card' : '') + '">' +
     '<div class="sale-top">' +
       '<div class="date-badge"><div class="d">' + bp.d + '</div><div class="m">' + bp.m + '</div></div>' +
       '<div class="sale-info">' +
@@ -427,9 +427,13 @@ function saleCardHTML(s, opts) {
         '<div class="sale-sub">' + esc(qtyTxt) + '</div>' +
         (s.description ? '<div class="sale-desc">' + esc(s.description) + '</div>' : '') +
         (isOwner() && seller ? '<span class="seller-badge">' + esc(seller.name) + '</span>' : '') +
+        ((!isOwner() && s.paid) ? '<span class="paid-badge">Pagado ✓</span>' : '') +
         '<div class="sale-links">' +
           '<button class="link-dim" data-edit="' + s.id + '">Editar</button>' +
           '<button class="link-dim" data-del="' + s.id + '">Eliminar</button>' +
+          ((isOwner() && s.seller_id !== profile.id)
+            ? '<button class="paid-btn ' + (s.paid ? 'paid-on' : 'paid-off') + '" data-paid="' + s.id + '" data-paid-state="' + (s.paid ? '1' : '0') + '">' + (s.paid ? 'Pagado ✓' : 'Marcar pagado') + '</button>'
+            : '') +
         '</div>' +
       '</div>' +
     '</div>' +
@@ -437,11 +441,42 @@ function saleCardHTML(s, opts) {
   '</div>';
 }
 
+function findSaleInCache(id) {
+  return allSalesCache.find(x => Number(x.id) === id) || dashSales.find(x => Number(x.id) === id);
+}
+
+function paintPaidButton(btn, paid) {
+  btn.className = 'paid-btn ' + (paid ? 'paid-on' : 'paid-off');
+  btn.textContent = paid ? 'Pagado ✓' : 'Marcar pagado';
+  btn.dataset.paidState = paid ? '1' : '0';
+}
+
+async function togglePaid(btn, saleId, currentlyPaid) {
+  const newPaid = !currentlyPaid;
+  paintPaidButton(btn, newPaid);                       // instant UI
+  const cached = findSaleInCache(saleId);
+  if (cached) cached.paid = newPaid;
+  btn.disabled = true;
+  try {
+    const { error } = await sb.from('sales').update({ paid: newPaid }).eq('id', saleId);
+    if (error) throw error;
+    toast(newPaid ? 'Venta marcada como pagada.' : 'Venta marcada como pendiente de pago.');
+  } catch (err) {
+    if (cached) cached.paid = currentlyPaid;
+    paintPaidButton(btn, currentlyPaid);
+    toast(dbError(err, 'No se pudo actualizar el estado de pago.'), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function bindSaleCardButtons(container) {
   container.querySelectorAll('[data-edit]').forEach(b =>
     b.onclick = () => editSale(Number(b.dataset.edit)));
   container.querySelectorAll('[data-del]').forEach(b =>
     b.onclick = () => { deleteId = Number(b.dataset.del); openModal('modal-del-back'); });
+  container.querySelectorAll('[data-paid]').forEach(b =>
+    b.onclick = () => togglePaid(b, Number(b.dataset.paid), b.dataset.paidState === '1'));
 }
 
 async function loadRecent() {
