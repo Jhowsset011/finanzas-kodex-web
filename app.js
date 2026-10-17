@@ -11,8 +11,11 @@ let profile = null;            // {id,name,username,role}
 let productsCache = [];
 let sellersCache = [];
 let currentView = 'registrar';
-let periodMode = 'month';       // day | month | year
+let periodMode = 'month';       // day | month | year | range
 let refDateISO = todayISO();
+let rangeFromISO = refDateISO.slice(0, 7) + '-01';
+let rangeToISO = refDateISO;
+let sellerFilterId = '';        // owner only: '' = all sellers
 let analysisTab = 'item';       // item | cat
 let editingId = null;
 let deleteId = null;
@@ -40,6 +43,17 @@ function badgeParts(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   return { d: String(d), m: MESES[m - 1] };
 }
+function fmtDMY(iso) {
+  if (!iso) return '—';
+  const [y, m, d] = iso.split('-');
+  return d + '/' + m + '/' + y;
+}
+function addDays(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + n));
+  return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' +
+         String(dt.getUTCDate()).padStart(2, '0');
+}
 function todayISO() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
@@ -51,13 +65,20 @@ function shiftMonth(ym, delta) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 }
 function periodRange() {
-  if (periodMode === 'day') return { from: refDateISO, to: refDateISO };
+  if (periodMode === 'day') return { from: refDateISO, to: addDays(refDateISO, 1) };
+  if (periodMode === 'range') return { from: rangeFromISO, to: addDays(rangeToISO, 1) };
   if (periodMode === 'year') {
     const y = refDateISO.slice(0, 4);
     return { from: y + '-01-01', to: y + '-12-31' };
   }
   const ym = refDateISO.slice(0, 7);
   return { from: ym + '-01', to: shiftMonth(ym, 1) + '-01' };
+}
+function periodTagText() {
+  if (periodMode === 'day') return fmtDMY(refDateISO);
+  if (periodMode === 'year') return refDateISO.slice(0, 4);
+  if (periodMode === 'range') return fmtDMY(rangeFromISO) + ' – ' + fmtDMY(rangeToISO);
+  return refDateISO.slice(5, 7) + '/' + refDateISO.slice(0, 4);
 }
 const isOwner = () => profile && profile.role === 'owner';
 
@@ -140,7 +161,7 @@ async function restoreSession() {
 async function logout() {
   await sb.auth.signOut();
   profile = null; productsCache = []; sellersCache = [];
-  dashSales = []; dashAd = {}; editingId = null;
+  dashSales = []; dashAd = {}; editingId = null; sellerFilterId = '';
   $('login-pass').value = '';
   $('view-main').classList.add('hidden');
   $('view-login').classList.remove('hidden');
@@ -194,15 +215,17 @@ async function enterApp() {
     b.classList.toggle('hidden', !isOwner()));
   $('card-ad-days').classList.toggle('hidden', !isOwner());
   $('card-sources').classList.toggle('hidden', !isOwner());
+  $('seller-filter-wrap').classList.toggle('hidden', !isOwner());
   try {
     const { data, error } = await sb.from('products')
       .select('id,name,reference,category,subcategory,cost_dop').order('name');
     if (error) throw error;
     productsCache = data || [];
     if (isOwner()) {
-      const { data: ss, error: sErr } = await sb.from('sellers').select('id,name,username,role');
+      const { data: ss, error: sErr } = await sb.from('sellers').select('id,name,username,role').order('name');
       if (sErr) throw sErr;
       sellersCache = ss || [];
+      buildSellerFilter();
     }
     buildProductSelect();
   } catch (err) {
@@ -421,7 +444,7 @@ function saleCardHTML(s, opts) {
 
   return '<div class="sale-card' + ((!isOwner() && s.paid) ? ' paid-card' : '') + '">' +
     '<div class="sale-top">' +
-      '<div class="date-badge"><div class="d">' + bp.d + '</div><div class="m">' + bp.m + '</div></div>' +
+      '<div class="date-badge" title="' + fmtDMY(s.sale_date) + '"><div class="d">' + bp.d + '</div><div class="m">' + bp.m + '</div></div>' +
       '<div class="sale-info">' +
         '<div class="sale-name">' + esc(p ? p.name : 'Producto') + '</div>' +
         '<div class="sale-sub">' + esc(qtyTxt) + '</div>' +
@@ -517,6 +540,20 @@ async function loadRecent() {
 }
 
 /* ================= Dashboard ================= */
+function buildSellerFilter() {
+  const sel = $('seller-filter');
+  sel.innerHTML = '<option value="">Todos</option>' +
+    sellersCache.map(s => '<option value="' + s.id + '">' + esc(s.name) + '</option>').join('');
+  sel.value = sellerFilterId;
+}
+
+function syncFilterUI() {
+  const isRange = periodMode === 'range';
+  $('ref-field').classList.toggle('hidden', isRange);
+  $('range-fields').classList.toggle('hidden', !isRange);
+  $('ref-date-dmy').textContent = '· ' + fmtDMY($('ref-date').value || refDateISO);
+}
+
 function dashQuery() {
   const { from, to } = periodRange();
   let q = sb.from('sales').select('*')
@@ -525,16 +562,19 @@ function dashQuery() {
   if (periodMode !== 'year') q = q.lt('sale_date', to);
   else q = q.lte('sale_date', to);
   if (!isOwner()) q = q.eq('seller_id', profile.id);
+  else if (sellerFilterId) q = q.eq('seller_id', sellerFilterId);
   return q;
 }
 
 async function loadDashboard() {
   const { from, to } = periodRange();
-  $('period-tag').textContent = periodMode === 'day' ? refDateISO :
-    periodMode === 'year' ? refDateISO.slice(0, 4) : refDateISO.slice(0, 7);
+  $('period-tag').textContent = periodTagText();
   $('analysis-tag').textContent = $('period-tag').textContent;
   $('chart-eyebrow').textContent = periodMode === 'day' ? 'Por hora' :
     periodMode === 'year' ? 'Por mes' : 'Por día';
+  $('analysis-eyebrow').textContent = 'Respeta el filtro de ' +
+    (periodMode === 'day' ? 'día' : periodMode === 'year' ? 'año' :
+     periodMode === 'range' ? 'rango' : 'mes');
   try {
     const { data: sales, error } = await dashQuery();
     if (error) throw error;
@@ -622,6 +662,13 @@ function renderChart() {
   const buckets = [];
   if (periodMode === 'day') {
     buckets.push({ label: refDateISO.slice(8, 10), total: periodTotal(s => s.sale_date === refDateISO) });
+  } else if (periodMode === 'range') {
+    let cur = rangeFromISO, guard = 0;
+    while (cur <= rangeToISO && guard < 366) {
+      buckets.push({ label: cur.slice(8, 10), total: periodTotal(s => s.sale_date === cur) });
+      cur = addDays(cur, 1);
+      guard++;
+    }
   } else if (periodMode === 'year') {
     const y = refDateISO.slice(0, 4);
     for (let m = 1; m <= 12; m++) {
@@ -837,10 +884,41 @@ function bindAll() {
       $('period-pills').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
       p.classList.add('active');
       periodMode = p.dataset.p;
+      if (periodMode === 'range' && (!rangeFromISO || !rangeToISO)) {
+        rangeFromISO = refDateISO.slice(0, 7) + '-01';
+        rangeToISO = todayISO();
+        $('range-from').value = rangeFromISO;
+        $('range-to').value = rangeToISO;
+      }
+      syncFilterUI();
       loadDashboard();
     });
   $('ref-date').addEventListener('change', () => {
-    if ($('ref-date').value) { refDateISO = $('ref-date').value; loadDashboard(); }
+    if ($('ref-date').value) {
+      refDateISO = $('ref-date').value;
+      syncFilterUI();
+      loadDashboard();
+    }
+  });
+  const onRangeChange = which => {
+    const fromEl = $('range-from'), toEl = $('range-to');
+    const prev = which === 'from' ? rangeFromISO : rangeToISO;
+    const val = which === 'from' ? fromEl.value : toEl.value;
+    if (!val) return;
+    if (which === 'from') rangeFromISO = val; else rangeToISO = val;
+    if (rangeFromISO && rangeToISO && rangeFromISO > rangeToISO) {
+      if (which === 'from') { rangeFromISO = prev; fromEl.value = prev; }
+      else { rangeToISO = prev; toEl.value = prev; }
+      toast('La fecha "Desde" debe ser anterior o igual a "Hasta".', true);
+      return;
+    }
+    loadDashboard();
+  };
+  $('range-from').addEventListener('change', () => onRangeChange('from'));
+  $('range-to').addEventListener('change', () => onRangeChange('to'));
+  $('seller-filter').addEventListener('change', () => {
+    sellerFilterId = $('seller-filter').value;
+    loadDashboard();
   });
   $('analysis-tabs').querySelectorAll('.pill').forEach(p =>
     p.onclick = () => {
@@ -858,6 +936,9 @@ function bindAll() {
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   bindAll();
   $('ref-date').value = refDateISO;
+  $('range-from').value = rangeFromISO;
+  $('range-to').value = rangeToISO;
+  syncFilterUI();
   try {
     if (await restoreSession()) await enterApp();
   } catch (err) {

@@ -151,10 +151,19 @@
             <button class="pill" data-p="day">Día</button>
             <button class="pill active" data-p="month">Mes</button>
             <button class="pill" data-p="year">Año</button>
+            <button class="pill" data-p="range">Rango</button>
           </div>
-          <label class="field">
-            <span>Fecha de referencia</span>
+          <label class="field" id="ref-field">
+            <span>Fecha de referencia <b class="ref-date-dmy" id="ref-date-dmy"></b></span>
             <input type="date" id="ref-date">
+          </label>
+          <div class="range-fields hidden" id="range-fields">
+            <label class="field"><span>Desde</span><input type="date" id="range-from"></label>
+            <label class="field"><span>Hasta</span><input type="date" id="range-to"></label>
+          </div>
+          <label class="field hidden" id="seller-filter-wrap">
+            <span>Vendedor</span>
+            <select id="seller-filter"></select>
           </label>
           <span class="period-tag" id="period-tag"></span>
         </div>
@@ -182,7 +191,7 @@
         <div class="card">
           <div class="panel-head">
             <div>
-              <div class="eyebrow">Respeta el filtro de mes</div>
+              <div class="eyebrow" id="analysis-eyebrow">Respeta el filtro de mes</div>
               <div class="card-title">Análisis de ventas</div>
             </div>
             <div style="display:flex;align-items:center;gap:14px">

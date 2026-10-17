@@ -225,6 +225,9 @@ h1.title { font-size: 44px; font-weight: 800; letter-spacing: -1px; line-height:
 .pill { border: 0; background: none; color: var(--text-dim); font-weight: 700; font-size: 13.5px; padding: 8px 20px; border-radius: 7px; }
 .pill.active { background: #1b232e; color: var(--text); }
 .filter-card .field { margin-bottom: 0; }
+.range-fields { display: flex; gap: 12px; }
+.range-fields .field { margin-bottom: 0; }
+.ref-date-dmy { color: var(--green); }
 .period-tag { margin-left: auto; color: var(--text-dim); font-size: 13px; }
 
 .stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: var(--radius); margin-bottom: 22px; overflow: hidden; }
