@@ -17,6 +17,8 @@ let rangeFromISO = refDateISO.slice(0, 7) + '-01';
 let rangeToISO = refDateISO;
 let sellerFilterId = '';        // owner only: '' = all sellers
 let analysisTab = 'item';       // item | cat
+let chartGroup = 'day';        // day | month | year (chart bucketing, independent of periodMode)
+let chartMetric = 'sales';      // sales | profit
 let editingId = null;
 let deleteId = null;
 let dashSales = [];             // sales in current dashboard period
@@ -571,8 +573,8 @@ async function loadDashboard() {
   const { from, to } = periodRange();
   $('period-tag').textContent = periodTagText();
   $('analysis-tag').textContent = $('period-tag').textContent;
-  $('chart-eyebrow').textContent = periodMode === 'day' ? 'Por hora' :
-    periodMode === 'year' ? 'Por mes' : 'Por día';
+  $('chart-eyebrow').textContent = chartGroup === 'year' ? 'Por año' :
+    chartGroup === 'month' ? 'Por mes' : 'Por día';
   $('analysis-eyebrow').textContent = 'Respeta el filtro de ' +
     (periodMode === 'day' ? 'día' : periodMode === 'year' ? 'año' :
      periodMode === 'range' ? 'rango' : 'mes');
@@ -658,63 +660,75 @@ function statHTML(label, value, sub, cls) {
     (sub ? '<div class="s-sub">' + sub + '</div>' : '') + '</div>';
 }
 
+/* Net profit of one sale, same logic as the dashboard cards:
+   owner's own sale -> margin - adPortion; seller's sale -> margin/2 (owner view);
+   seller view -> margin/2 */
+function saleNetOf(s, adMap) {
+  const p = productById(s.product_id);
+  const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
+  if (isOwner()) return s.seller_id === profile.id ? m - (adMap[s.sale_date] || 0) : m / 2;
+  return m / 2;
+}
+
 function renderChart() {
   const box = $('chart');
+  $('chart-metric-tag').classList.toggle('hidden', chartMetric !== 'profit');
   const W = 640, H = 300, PL = 44, PB = 30, PT = 8;
-  const buckets = [];
-  if (periodMode === 'day') {
-    buckets.push({ label: refDateISO.slice(8, 10), total: periodTotal(s => s.sale_date === refDateISO) });
-  } else if (periodMode === 'range') {
-    let cur = rangeFromISO, guard = 0;
-    while (cur <= rangeToISO && guard < 366) {
-      buckets.push({ label: cur.slice(8, 10), total: periodTotal(s => s.sale_date === cur) });
-      cur = addDays(cur, 1);
-      guard++;
+  const adMap = isOwner() ? adPortionMap() : {};
+  const valOf = chartMetric === 'profit'
+    ? (s => saleNetOf(s, adMap))
+    : (s => (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0));
+  const keyOf = s => chartGroup === 'year' ? s.sale_date.slice(0, 4)
+    : chartGroup === 'month' ? s.sale_date.slice(0, 7) : s.sale_date;
+  const multiYear = new Set(dashSales.map(s => s.sale_date.slice(0, 4))).size > 1;
+  const labelOf = k => {
+    if (chartGroup === 'year') return k;
+    if (chartGroup === 'month') {
+      const mm = MESES[Number(k.slice(5, 7)) - 1];
+      return multiYear ? mm + " '" + k.slice(2, 4) : mm;
     }
-  } else if (periodMode === 'year') {
-    const y = refDateISO.slice(0, 4);
-    for (let m = 1; m <= 12; m++) {
-      const ym = y + '-' + String(m).padStart(2, '0');
-      buckets.push({ label: MESES[m - 1], total: periodTotal(s => s.sale_date.slice(0, 7) === ym) });
-    }
-  } else {
-    const ym = refDateISO.slice(0, 7);
-    const dim = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0).getDate();
-    for (let d = 1; d <= dim; d++) {
-      const dt = ym + '-' + String(d).padStart(2, '0');
-      const t = periodTotal(s => s.sale_date === dt);
-      if (t > 0 || dim <= 31) buckets.push({ label: String(d), total: t, show: t > 0 });
-    }
-  }
-  const shown = buckets.filter(b => b.show !== false);
-  const max = Math.max(1, ...shown.map(b => b.total));
-  const step = niceStep(max);
-  const yMax = Math.ceil(max / step) * step;
+    return k.slice(8, 10);
+  };
+  const agg = {};
+  dashSales.forEach(s => { const k = keyOf(s); agg[k] = (agg[k] || 0) + valOf(s); });
+  const shown = Object.keys(agg).sort()
+    .map(k => ({ label: labelOf(k), total: agg[k] }))
+    .filter(b => b.total !== 0);
+  if (!shown.length) { box.innerHTML = '<div class="empty">Sin ventas en el período.</div>'; return; }
+  const vals = shown.map(b => b.total);
+  const hi = Math.max(1, ...vals), lo = Math.min(0, ...vals);
+  const step = niceStep(hi - lo);
+  const yMax = Math.ceil(hi / step) * step;
+  const yMin = Math.floor(lo / step) * step;
+  const span = (yMax - yMin) || 1;
   const iw = W - PL - 8, ih = H - PT - PB;
+  const yOf = v => PT + ih - ((v - yMin) / span) * ih;
   const bw = Math.min(120, (iw / Math.max(1, shown.length)) * 0.55);
+  const barFill = chartMetric === 'profit' ? '#4ade80' : '#22c55e';
+  const tipLabel = chartMetric === 'profit' ? 'Ganancia' : 'Ventas';
+  const axFmt = v => Math.abs(v) >= 1000 ? (v / 1000) + ' K' : String(v);
   let svg = '<svg class="bar-chart" viewBox="0 0 ' + W + ' ' + H + '">';
-  for (let v = 0; v <= yMax; v += step) {
-    const y = PT + ih - (v / yMax) * ih;
-    svg += '<line x1="' + PL + '" y1="' + y + '" x2="' + W + '" y2="' + y + '" stroke="#1a222c" stroke-width="1"/>' +
-      '<text x="' + (PL - 8) + '" y="' + (y + 4) + '" fill="#5d6672" font-size="11" text-anchor="end">' +
-      (v >= 1000 ? (v / 1000) + ' K' : v) + '</text>';
+  for (let v = yMin; v <= yMax + 1e-9; v += step) {
+    const y = yOf(v);
+    svg += '<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + W + '" y2="' + y.toFixed(1) +
+      '" stroke="#1a222c" stroke-width="1"/>' +
+      '<text x="' + (PL - 8) + '" y="' + (y + 4).toFixed(1) + '" fill="#5d6672" font-size="11" text-anchor="end">' +
+      axFmt(v) + '</text>';
   }
   shown.forEach((b, i) => {
-    const h = (b.total / yMax) * ih;
+    const y0 = yOf(0), y1 = yOf(b.total);
+    const y = Math.min(y0, y1), h = Math.abs(y1 - y0);
     const x = PL + (iw / shown.length) * i + ((iw / shown.length) - bw) / 2;
-    const y = PT + ih - h;
+    const fill = b.total < 0 ? '#ef4444' : barFill;
     svg += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
-      '" height="' + Math.max(0, h).toFixed(1) + '" rx="5" fill="#22c55e"/>';
+      '" height="' + Math.max(0, h).toFixed(1) + '" rx="5" fill="' + fill + '">' +
+      '<title>' + tipLabel + ': ' + fmtMoney(b.total) + '</title></rect>';
     if (shown.length <= 31) {
-      svg += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) + '" fill="#5d6672" font-size="11" text-anchor="middle">' + b.label + '</text>';
+      svg += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) + '" fill="#5d6672" font-size="11" text-anchor="middle">' + esc(b.label) + '</text>';
     }
   });
   svg += '</svg>';
   box.innerHTML = svg;
-}
-function periodTotal(fn) {
-  return dashSales.filter(fn).reduce((a, s) =>
-    a + (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0), 0);
 }
 function niceStep(max) {
   const raw = max / 4;
@@ -929,6 +943,22 @@ function bindAll() {
       p.classList.add('active');
       analysisTab = p.dataset.t;
       renderAnalysis();
+    });
+  $('chart-group-pills').querySelectorAll('.pill').forEach(p =>
+    p.onclick = () => {
+      $('chart-group-pills').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      chartGroup = p.dataset.g;
+      $('chart-eyebrow').textContent = chartGroup === 'year' ? 'Por año' :
+        chartGroup === 'month' ? 'Por mes' : 'Por día';
+      renderChart();
+    });
+  $('chart-metric-pills').querySelectorAll('.pill').forEach(p =>
+    p.onclick = () => {
+      $('chart-metric-pills').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      chartMetric = p.dataset.m;
+      renderChart();
     });
 
   bindSaleForm();
