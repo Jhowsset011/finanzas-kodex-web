@@ -100,10 +100,11 @@ function dbError(err, fallback) {
 
 /* Profit math:
    margin      = qty*price - qty*cost - shipping
-   sellerShare = margin / 2
-   ownerNet (seller sale) = share - adPortion(date)
+   sellerShare = margin / 2            (ad spend NEVER touches sellers)
+   ownerNet (seller sale) = share
    ownerNet (own sale)    = margin - adPortion(date)
-   adPortion(date) = ad_spend[date] / nº ventas ese día (todas) */
+   adPortion(date) = ad_spend[date] / nº ventas DEL DUEÑO ese día
+   (advertising is absorbed entirely by the owner's own sales) */
 const saleMargin = (s, cost) =>
   (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0) -
   (Number(s.quantity) || 0) * (Number(cost) || 0) -
@@ -409,13 +410,6 @@ async function confirmDelete() {
 /* ================= Sale cards ================= */
 let allSalesCache = [];   // recent sales (registrar view)
 
-function adPortionFor(date, salesAll, adMap) {
-  const amt = Number(adMap[date]) || 0;
-  if (amt <= 0) return 0;
-  const n = salesAll.filter(s => s.sale_date === date).length;
-  return n > 0 ? amt / n : 0;
-}
-
 function saleCardHTML(s, opts) {
   const p = productById(s.product_id);
   const bp = badgeParts(s.sale_date);
@@ -427,15 +421,21 @@ function saleCardHTML(s, opts) {
 
   let nums;
   if (isOwner()) {
-    const adP = opts.adPortion || 0;
     const isOwn = s.seller_id === profile.id;
-    const mid = isOwn ? margin : margin / 2;
-    const net = mid - adP;
-    nums =
-      '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div>' +
-      '<div class="sn-label" style="margin-top:8px">Publicidad asignada</div><div class="sn-value">−' + fmtMoney(adP) + '</div></div>' +
-      '<div style="text-align:right"><div class="sn-label">' + (isOwn ? 'Ganancia' : 'Antes de anuncios') + '</div><div class="sn-value">' + fmtMoney(mid) + '</div>' +
-      '<div class="sn-label" style="margin-top:8px">Ganancia neta</div><div class="sn-value green">' + fmtMoney(net) + '</div></div>';
+    if (isOwn) {
+      const adP = opts.adPortion || 0;
+      const net = margin - adP;
+      nums =
+        '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div>' +
+        '<div class="sn-label" style="margin-top:8px">Publicidad asignada</div><div class="sn-value">−' + fmtMoney(adP) + '</div></div>' +
+        '<div style="text-align:right"><div class="sn-label">Ganancia</div><div class="sn-value">' + fmtMoney(margin) + '</div>' +
+        '<div class="sn-label" style="margin-top:8px">Ganancia neta</div><div class="sn-value green">' + fmtMoney(net) + '</div></div>';
+    } else {
+      // seller's sale: ad spend never applies — owner's half, no ad rows
+      nums =
+        '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div></div>' +
+        '<div style="text-align:right"><div class="sn-label">Ganancia neta</div><div class="sn-value green">' + fmtMoney(margin / 2) + '</div></div>';
+    }
   } else {
     nums =
       '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div></div>' +
@@ -518,10 +518,11 @@ async function loadRecent() {
       const dates = [...new Set(allSalesCache.map(s => s.sale_date))];
       const { data: ads } = await sb.from('ad_spend').select('spend_date,amount_dop')
         .in('spend_date', dates);
-      const { data: allDay } = await sb.from('sales').select('sale_date').in('sale_date', dates);
+      const { data: allDay } = await sb.from('sales').select('sale_date,seller_id').in('sale_date', dates);
       (ads || []).forEach(a => adMap[a.spend_date] = Number(a.amount_dop));
       var dayCounts = {};
-      (allDay || []).forEach(s => dayCounts[s.sale_date] = (dayCounts[s.sale_date] || 0) + 1);
+      // ad spend is split only among the OWNER's sales of the day
+      (allDay || []).forEach(s => { if (s.seller_id === profile.id) dayCounts[s.sale_date] = (dayCounts[s.sale_date] || 0) + 1; });
     }
     if (!allSalesCache.length) { box.innerHTML = '<div class="empty">Sin ventas todavía.</div>'; return; }
     box.innerHTML = allSalesCache.map(s => {
@@ -599,7 +600,8 @@ async function loadDashboard() {
 
 function adPortionMap() {
   const counts = {};
-  dashSales.forEach(s => counts[s.sale_date] = (counts[s.sale_date] || 0) + 1);
+  // ad spend is divided only among the OWNER's sales of each day
+  dashSales.forEach(s => { if (s.seller_id === profile.id) counts[s.sale_date] = (counts[s.sale_date] || 0) + 1; });
   const map = {};
   Object.keys(dashAd).forEach(d => {
     const n = counts[d] || 0;
@@ -621,14 +623,14 @@ function renderStats() {
     const envios = dashSales.reduce((a, s) => a + (Number(s.shipping_cost_dop) || 0), 0);
     const adMap = adPortionMap();
     const adTotal = Object.keys(dashAd).reduce((a, d) => a + dashAd[d], 0);
-    const adAssigned = dashSales.reduce((a, s) => a + (adMap[s.sale_date] || 0), 0);
+    const adAssigned = dashSales.reduce((a, s) => a + (s.seller_id === profile.id ? (adMap[s.sale_date] || 0) : 0), 0);
     const adUnassigned = adTotal - adAssigned;
     let net = 0;
     dashSales.forEach(s => {
       const p = productById(s.product_id);
       const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
-      const mid = s.seller_id === profile.id ? m : m / 2;
-      net += mid - (adMap[s.sale_date] || 0);
+      // ad spend is deducted ONLY from the owner's own sales
+      net += s.seller_id === profile.id ? m - (adMap[s.sale_date] || 0) : m / 2;
     });
     const marginPct = ventas > 0 ? (net / ventas * 100) : 0;
     row.innerHTML =
@@ -759,8 +761,8 @@ function renderAnalysis() {
     const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
     let net;
     if (isOwner()) {
-      const mid = s.seller_id === profile.id ? m : m / 2;
-      net = mid - (adMap[s.sale_date] || 0);
+      // ad spend is deducted ONLY from the owner's own sales
+      net = s.seller_id === profile.id ? m - (adMap[s.sale_date] || 0) : m / 2;
     } else {
       net = m / 2;
     }
@@ -780,7 +782,8 @@ function renderAnalysis() {
 function renderAdDays() {
   const box = $('ad-days-list');
   const counts = {};
-  dashSales.forEach(s => counts[s.sale_date] = (counts[s.sale_date] || 0) + 1);
+  // a day counts as "with sales" only if the OWNER sold that day
+  dashSales.forEach(s => { if (s.seller_id === profile.id) counts[s.sale_date] = (counts[s.sale_date] || 0) + 1; });
   const rows = Object.keys(dashAd)
     .filter(d => !counts[d])
     .sort()
