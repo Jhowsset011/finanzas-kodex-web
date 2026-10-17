@@ -175,9 +175,20 @@
             <div class="chart-head">
               <div>
                 <div class="eyebrow" id="chart-eyebrow">Por día</div>
-                <div class="card-title">Ventas del período</div>
+                <div class="card-title">Ventas del período <span class="metric-tag hidden" id="chart-metric-tag">Ganancia</span></div>
               </div>
               <span class="unit">RD$</span>
+            </div>
+            <div class="chart-controls">
+              <div class="pills pills-sm" id="chart-group-pills">
+                <button class="pill active" data-g="day">Día</button>
+                <button class="pill" data-g="month">Mes</button>
+                <button class="pill" data-g="year">Año</button>
+              </div>
+              <div class="pills pills-sm" id="chart-metric-pills">
+                <button class="pill active" data-m="sales">Ventas</button>
+                <button class="pill" data-m="profit">Ganancia</button>
+              </div>
             </div>
             <div id="chart"></div>
           </div>
