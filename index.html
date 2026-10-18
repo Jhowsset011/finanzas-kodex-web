@@ -70,7 +70,8 @@
               <div class="row2">
                 <label class="field">
                   <span>Fecha</span>
-                  <input type="date" id="sale-date">
+                  <button type="button" class="date-btn" id="sale-date-btn"><span id="sale-date-label"></span><span class="range-btn-cal">📅</span></button>
+                  <input type="hidden" id="sale-date">
                 </label>
                 <label class="field">
                   <span>Cantidad</span>
@@ -153,10 +154,11 @@
             <button class="pill" data-p="year">Año</button>
             <button class="pill" data-p="range">Rango</button>
           </div>
-          <label class="field" id="ref-field">
-            <span>Fecha de referencia <b class="ref-date-dmy" id="ref-date-dmy"></b></span>
-            <input type="date" id="ref-date">
-          </label>
+          <div class="field" id="ref-field">
+            <span>Fecha de referencia</span>
+            <button type="button" class="date-btn" id="ref-date-btn"><span id="ref-date-btn-label"></span><span class="range-btn-cal">📅</span></button>
+            <input type="hidden" id="ref-date">
+          </div>
           <div class="range-fields hidden" id="range-fields">
             <button class="range-btn" id="range-btn" type="button">
               <span class="range-btn-label" id="range-btn-label"></span>
@@ -279,7 +281,10 @@
 <div class="modal-back hidden" id="modal-ad-back">
   <div class="modal">
     <h2>Registrar publicidad</h2>
-    <label class="field"><span>Fecha</span><input type="date" id="ad-date"></label>
+    <label class="field"><span>Fecha</span>
+      <button type="button" class="date-btn" id="ad-date-btn"><span id="ad-date-label"></span><span class="range-btn-cal">📅</span></button>
+      <input type="hidden" id="ad-date">
+    </label>
     <label class="field"><span>Monto (RD$)</span><input type="number" id="ad-amount" min="0" step="1" placeholder="0" inputmode="decimal"></label>
     <p id="ad-error" class="error hidden"></p>
     <div class="btn-row">
@@ -329,8 +334,8 @@
         </div>
         <div class="picker-grid" id="pk-grid"></div>
         <div class="picker-dates">
-          <div class="picker-date"><span>Fecha de inicio</span><b id="pk-from">—</b></div>
-          <div class="picker-date"><span>Fecha de finalización</span><b id="pk-to">—</b></div>
+          <div class="picker-date"><span id="pk-from-label">Fecha de inicio</span><b id="pk-from">—</b></div>
+          <div class="picker-date" id="pk-to-wrap"><span>Fecha de finalización</span><b id="pk-to">—</b></div>
         </div>
       </div>
       <div class="picker-presets" id="pk-presets">
