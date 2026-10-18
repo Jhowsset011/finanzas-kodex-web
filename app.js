@@ -202,6 +202,7 @@ async function changePassword() {
 function showView(v) {
   currentView = v;
   $('view-registrar').classList.toggle('hidden', v !== 'registrar');
+  $('view-dashboard').classList.toggle('hidden', v !== 'dashboard');
   $('nav-registrar').classList.toggle('active', v === 'registrar');
   $('nav-dashboard').classList.toggle('active', v === 'dashboard');
   if (v === 'registrar') loadRecent();
@@ -212,6 +213,7 @@ async function enterApp() {
   $('topbar-user').textContent = profile.name + (isOwner() ? ' · Dueño' : ' · Vendedor');
   $('view-login').classList.add('hidden');
   $('view-main').classList.remove('hidden');
+  // owner-only controls
   document.querySelectorAll('#btn-refresh-sources, #btn-refresh-all').forEach(b =>
     b.classList.toggle('hidden', !isOwner()));
   $('card-ad-days').classList.toggle('hidden', !isOwner());
@@ -343,6 +345,7 @@ async function saveSale() {
     sale_date: f.date,
     description: f.desc,
   };
+  // persist manual cost for products without cost
   const manualCost = (p.cost_dop === 0 && f.cost > 0) ? f.cost : 0;
   try {
     if (editingId) {
@@ -403,8 +406,139 @@ async function confirmDelete() {
     if (currentView === 'dashboard') loadDashboard();
   } catch (err) {
     toast(dbError(err, 'No se pudo eliminar.'), true);
+  }
+}
+
+/* ================= Sale cards ================= */
+let allSalesCache = [];   // recent sales (registrar view)
+
+function saleCardHTML(s, opts) {
+  const p = productById(s.product_id);
+  const bp = badgeParts(s.sale_date);
+  const cost = p ? Number(p.cost_dop) : 0;
+  const venta = (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0);
+  const margin = saleMargin(s, cost);
+  const seller = sellerById(s.seller_id);
+  const qtyTxt = s.quantity + ' × ' + fmtMoney(s.unit_sale_price_dop);
+
+  let nums;
+  if (isOwner()) {
+    const isOwn = s.seller_id === profile.id;
+    if (isOwn) {
+      const adP = opts.adPortion || 0;
+      const net = margin - adP;
+      nums =
+        '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div>' +
+        '<div class="sn-label" style="margin-top:8px">Publicidad asignada</div><div class="sn-value">−' + fmtMoney(adP) + '</div></div>' +
+        '<div style="text-align:right"><div class="sn-label">Ganancia</div><div class="sn-value">' + fmtMoney(margin) + '</div>' +
+        '<div class="sn-label" style="margin-top:8px">Ganancia neta</div><div class="sn-value green">' + fmtMoney(net) + '</div></div>';
+    } else {
+      // seller's sale: ad spend never applies — owner's half, no ad rows
+      nums =
+        '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div></div>' +
+        '<div style="text-align:right"><div class="sn-label">Ganancia neta</div><div class="sn-value green">' + fmtMoney(margin / 2) + '</div></div>';
+    }
+  } else {
+    nums =
+      '<div><div class="sn-label">Venta</div><div class="sn-value">' + fmtMoney(venta) + '</div></div>' +
+      '<div style="text-align:right"><div class="sn-label">Tu parte (50%)</div><div class="sn-value green">' + fmtMoney(margin / 2) + '</div></div>';
+  }
+
+  return '<div class="sale-card' + ((!isOwner() && s.paid) ? ' paid-card' : '') + '">' +
+    '<div class="sale-top">' +
+      '<div class="date-badge" title="' + fmtDMY(s.sale_date) + '"><div class="d">' + bp.d + '</div><div class="m">' + bp.m + '</div></div>' +
+      '<div class="sale-info">' +
+        '<div class="sale-name">' + esc(p ? p.name : 'Producto') + '</div>' +
+        '<div class="sale-sub">' + esc(qtyTxt) + '</div>' +
+        (s.description ? '<div class="sale-desc">' + esc(s.description) + '</div>' : '') +
+        (isOwner() && seller ? '<span class="seller-badge">' + esc(seller.name) + '</span>' : '') +
+        ((!isOwner() && s.paid) ? '<span class="paid-badge">Pagado ✓</span>' : '') +
+        '<div class="sale-links">' +
+          '<button class="link-dim" data-edit="' + s.id + '">Editar</button>' +
+          '<button class="link-dim" data-del="' + s.id + '">Eliminar</button>' +
+          ((isOwner() && s.seller_id !== profile.id)
+            ? '<button class="paid-btn ' + (s.paid ? 'paid-on' : 'paid-off') + '" data-paid="' + s.id + '" data-paid-state="' + (s.paid ? '1' : '0') + '">' + (s.paid ? 'Pagado ✓' : 'Marcar pagado') + '</button>'
+            : '') +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="sale-nums">' + nums + '</div>' +
+  '</div>';
+}
+
+function findSaleInCache(id) {
+  return allSalesCache.find(x => Number(x.id) === id) || dashSales.find(x => Number(x.id) === id);
+}
+
+function paintPaidButton(btn, paid) {
+  btn.className = 'paid-btn ' + (paid ? 'paid-on' : 'paid-off');
+  btn.textContent = paid ? 'Pagado ✓' : 'Marcar pagado';
+  btn.dataset.paidState = paid ? '1' : '0';
+}
+
+async function togglePaid(btn, saleId, currentlyPaid) {
+  const newPaid = !currentlyPaid;
+  paintPaidButton(btn, newPaid);                       // instant UI
+  const cached = findSaleInCache(saleId);
+  if (cached) cached.paid = newPaid;
+  btn.disabled = true;
+  try {
+    const { error } = await sb.from('sales').update({ paid: newPaid }).eq('id', saleId);
+    if (error) throw error;
+    toast(newPaid ? 'Venta marcada como pagada.' : 'Venta marcada como pendiente de pago.');
+  } catch (err) {
+    if (cached) cached.paid = currentlyPaid;
+    paintPaidButton(btn, currentlyPaid);
+    toast(dbError(err, 'No se pudo actualizar el estado de pago.'), true);
   } finally {
     btn.disabled = false;
+  }
+}
+
+function bindSaleCardButtons(container) {
+  container.querySelectorAll('[data-edit]').forEach(b =>
+    b.onclick = () => editSale(Number(b.dataset.edit)));
+  container.querySelectorAll('[data-del]').forEach(b =>
+    b.onclick = () => { deleteId = Number(b.dataset.del); openModal('modal-del-back'); });
+  container.querySelectorAll('[data-paid]').forEach(b =>
+    b.onclick = () => togglePaid(b, Number(b.dataset.paid), b.dataset.paidState === '1'));
+}
+
+async function loadRecent() {
+  const box = $('recent-sales');
+  box.innerHTML = '<div class="empty">Cargando…</div>';
+  try {
+    let q = sb.from('sales').select('*').order('sale_date', { ascending: false })
+      .order('created_at', { ascending: false }).limit(10);
+    if (!isOwner()) q = q.eq('seller_id', profile.id);
+    const { data, error } = await q;
+    if (error) throw error;
+    allSalesCache = data || [];
+    // ad portions for owner
+    let adMap = {};
+    if (isOwner() && allSalesCache.length) {
+      const dates = [...new Set(allSalesCache.map(s => s.sale_date))];
+      const { data: ads } = await sb.from('ad_spend').select('spend_date,amount_dop')
+        .in('spend_date', dates);
+      const { data: allDay } = await sb.from('sales').select('sale_date,seller_id').in('sale_date', dates);
+      (ads || []).forEach(a => adMap[a.spend_date] = Number(a.amount_dop));
+      var dayCounts = {};
+      // ad spend is split only among the OWNER's sales of the day
+      (allDay || []).forEach(s => { if (s.seller_id === profile.id) dayCounts[s.sale_date] = (dayCounts[s.sale_date] || 0) + 1; });
+    }
+    if (!allSalesCache.length) { box.innerHTML = '<div class="empty">Sin ventas todavía.</div>'; return; }
+    box.innerHTML = allSalesCache.map(s => {
+      let adP = 0;
+      if (isOwner()) {
+        const amt = Number(adMap[s.sale_date]) || 0;
+        const n = dayCounts[s.sale_date] || 1;
+        adP = amt / n;
+      }
+      return saleCardHTML(s, { adPortion: adP });
+    }).join('');
+    bindSaleCardButtons(box);
+  } catch (err) {
+    box.innerHTML = '<div class="empty">No se pudieron cargar las ventas.</div>';
   }
 }
 
@@ -561,6 +695,7 @@ async function loadDashboard() {
 
 function adPortionMap() {
   const counts = {};
+  // ad spend is divided only among the OWNER's sales of each day
   dashSales.forEach(s => { if (s.seller_id === profile.id) counts[s.sale_date] = (counts[s.sale_date] || 0) + 1; });
   const map = {};
   Object.keys(dashAd).forEach(d => {
@@ -583,10 +718,13 @@ function renderStats() {
     const envios = dashSales.reduce((a, s) => a + (Number(s.shipping_cost_dop) || 0), 0);
     const adMap = adPortionMap();
     const adTotal = Object.keys(dashAd).reduce((a, d) => a + dashAd[d], 0);
+    const adAssigned = dashSales.reduce((a, s) => a + (s.seller_id === profile.id ? (adMap[s.sale_date] || 0) : 0), 0);
+    const adUnassigned = adTotal - adAssigned;
     let net = 0;
     dashSales.forEach(s => {
       const p = productById(s.product_id);
       const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
+      // ad spend is deducted ONLY from the owner's own sales
       net += s.seller_id === profile.id ? m - (adMap[s.sale_date] || 0) : m / 2;
     });
     const marginPct = ventas > 0 ? (net / ventas * 100) : 0;
@@ -594,7 +732,7 @@ function renderStats() {
       statHTML('Ventas', fmtMoney(ventas), n + ' ventas · ' + units + ' unidades') +
       statHTML('Costo productos', fmtMoney(costo), '') +
       statHTML('Envíos', fmtMoney(envios), '') +
-      statHTML('Publicidad', fmtMoney(adTotal), '') +
+      statHTML('Publicidad', fmtMoney(adTotal), fmtMoney(adUnassigned) + ' en días sin ventas') +
       statHTML('Ganancia neta', (net < 0 ? '−' : '') + fmtMoney(Math.abs(net)),
         'Margen ' + marginPct.toFixed(1) + '%', net < 0 ? 'red' : '');
   } else {
@@ -615,6 +753,159 @@ function statHTML(label, value, sub, cls) {
     (sub ? '<div class="s-sub">' + sub + '</div>' : '') + '</div>';
 }
 
+/* Net profit of one sale, same logic as the dashboard cards:
+   owner's own sale -> margin - adPortion; seller's sale -> margin/2 (owner view);
+   seller view -> margin/2 */
+function saleNetOf(s, adMap) {
+  const p = productById(s.product_id);
+  const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
+  if (isOwner()) return s.seller_id === profile.id ? m - (adMap[s.sale_date] || 0) : m / 2;
+  return m / 2;
+}
+
+function renderChart() {
+  const box = $('chart');
+  $('chart-metric-tag').classList.toggle('hidden', chartMetric !== 'profit');
+  const W = 640, H = 300, PL = 44, PB = 30, PT = 8;
+  const adMap = isOwner() ? adPortionMap() : {};
+  const valOf = chartMetric === 'profit'
+    ? (s => saleNetOf(s, adMap))
+    : (s => (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0));
+  const keyOf = s => chartGroup === 'year' ? s.sale_date.slice(0, 4)
+    : chartGroup === 'month' ? s.sale_date.slice(0, 7) : s.sale_date;
+  const multiYear = new Set(dashSales.map(s => s.sale_date.slice(0, 4))).size > 1;
+  const labelOf = k => {
+    if (chartGroup === 'year') return k;
+    if (chartGroup === 'month') {
+      const mm = MESES[Number(k.slice(5, 7)) - 1];
+      return multiYear ? mm + " '" + k.slice(2, 4) : mm;
+    }
+    return k.slice(8, 10);
+  };
+  const agg = {};
+  dashSales.forEach(s => { const k = keyOf(s); agg[k] = (agg[k] || 0) + valOf(s); });
+  const shown = Object.keys(agg).sort()
+    .map(k => ({ label: labelOf(k), total: agg[k] }))
+    .filter(b => b.total !== 0);
+  if (!shown.length) { box.innerHTML = '<div class="empty">Sin ventas en el período.</div>'; return; }
+  const vals = shown.map(b => b.total);
+  const hi = Math.max(1, ...vals), lo = Math.min(0, ...vals);
+  const step = niceStep(hi - lo);
+  const yMax = Math.ceil(hi / step) * step;
+  const yMin = Math.floor(lo / step) * step;
+  const span = (yMax - yMin) || 1;
+  const iw = W - PL - 8, ih = H - PT - PB;
+  const yOf = v => PT + ih - ((v - yMin) / span) * ih;
+  const bw = Math.min(120, (iw / Math.max(1, shown.length)) * 0.55);
+  const barFill = chartMetric === 'profit' ? '#4ade80' : '#22c55e';
+  const tipLabel = chartMetric === 'profit' ? 'Ganancia' : 'Ventas';
+  const axFmt = v => Math.abs(v) >= 1000 ? (v / 1000) + ' K' : String(v);
+  let svg = '<svg class="bar-chart" viewBox="0 0 ' + W + ' ' + H + '">';
+  for (let v = yMin; v <= yMax + 1e-9; v += step) {
+    const y = yOf(v);
+    svg += '<line x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + W + '" y2="' + y.toFixed(1) +
+      '" stroke="#1a222c" stroke-width="1"/>' +
+      '<text x="' + (PL - 8) + '" y="' + (y + 4).toFixed(1) + '" fill="#5d6672" font-size="11" text-anchor="end">' +
+      axFmt(v) + '</text>';
+  }
+  shown.forEach((b, i) => {
+    const y0 = yOf(0), y1 = yOf(b.total);
+    const y = Math.min(y0, y1), h = Math.abs(y1 - y0);
+    const x = PL + (iw / shown.length) * i + ((iw / shown.length) - bw) / 2;
+    const fill = b.total < 0 ? '#ef4444' : barFill;
+    svg += '<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) +
+      '" height="' + Math.max(0, h).toFixed(1) + '" rx="5" fill="' + fill + '">' +
+      '<title>' + tipLabel + ': ' + fmtMoney(b.total) + '</title></rect>';
+    if (shown.length <= 31) {
+      svg += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) + '" fill="#5d6672" font-size="11" text-anchor="middle">' + esc(b.label) + '</text>';
+    }
+  });
+  svg += '</svg>';
+  box.innerHTML = svg;
+}
+function niceStep(max) {
+  const raw = max / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / mag;
+  return (n >= 5 ? 5 : n >= 2 ? 2 : 1) * mag;
+}
+
+function renderTopProducts() {
+  const box = $('top-products');
+  const agg = {};
+  dashSales.forEach(s => {
+    const p = productById(s.product_id);
+    const key = s.product_id;
+    if (!agg[key]) agg[key] = { name: p ? p.name : 'Producto', units: 0, total: 0 };
+    agg[key].units += Number(s.quantity) || 0;
+    agg[key].total += (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0);
+  });
+  const rows = Object.values(agg).sort((a, b) => b.units - a.units).slice(0, 8);
+  if (!rows.length) { box.innerHTML = '<div class="empty">Sin ventas en el período.</div>'; return; }
+  box.innerHTML = rows.map((r, i) =>
+    '<div class="rank-row"><span class="rk">' + String(i + 1).padStart(2, '0') + '</span>' +
+    '<div class="rn"><div class="t">' + esc(r.name) + '</div>' +
+    '<div class="s">' + fmtMoney(r.total) + ' en ventas</div></div>' +
+    '<span class="rc">' + r.units + '</span></div>'
+  ).join('');
+}
+
+function renderAnalysis() {
+  const tb = $('analysis-table').querySelector('tbody');
+  $('analysis-net-head').textContent = isOwner() ? 'Ganancia neta' : 'Mi parte';
+  const adMap = isOwner() ? adPortionMap() : {};
+  const agg = {};
+  dashSales.forEach(s => {
+    const p = productById(s.product_id);
+    const key = analysisTab === 'item' ? s.product_id : (p ? (p.category || 'Sin categoría') : 'Sin categoría');
+    if (!agg[key]) agg[key] = {
+      name: analysisTab === 'item' ? (p ? p.name : 'Producto') : key,
+      sub: analysisTab === 'item' ? (p ? (p.category || '') : '') : '',
+      units: 0, ingresos: 0, net: 0
+    };
+    const qty = Number(s.quantity) || 0;
+    const ing = qty * (Number(s.unit_sale_price_dop) || 0);
+    const m = saleMargin(s, p ? Number(p.cost_dop) : 0);
+    let net;
+    if (isOwner()) {
+      // ad spend is deducted ONLY from the owner's own sales
+      net = s.seller_id === profile.id ? m - (adMap[s.sale_date] || 0) : m / 2;
+    } else {
+      net = m / 2;
+    }
+    agg[key].units += qty; agg[key].ingresos += ing; agg[key].net += net;
+  });
+  const rows = Object.values(agg).sort((a, b) => b.ingresos - a.ingresos);
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="4" class="empty">Sin ventas en el período.</td></tr>'; return; }
+  tb.innerHTML = rows.map(r =>
+    '<tr><td><div style="font-weight:700">' + esc(r.name) + '</div>' +
+    (r.sub ? '<div class="sub">' + esc(r.sub) + '</div>' : '') + '</td>' +
+    '<td class="num">' + r.units + '</td>' +
+    '<td class="num">' + fmtMoney(r.ingresos) + '</td>' +
+    '<td class="num green">' + fmtMoney(r.net) + '</td></tr>'
+  ).join('');
+}
+
+function renderAdDays() {
+  const box = $('ad-days-list');
+  const counts = {};
+  // a day counts as "with sales" only if the OWNER sold that day
+  dashSales.forEach(s => { if (s.seller_id === profile.id) counts[s.sale_date] = (counts[s.sale_date] || 0) + 1; });
+  const rows = Object.keys(dashAd)
+    .filter(d => !counts[d])
+    .sort()
+    .map(d => ({ date: d, amt: dashAd[d] }));
+  const total = rows.reduce((a, r) => a + r.amt, 0);
+  $('ad-unassigned').textContent = fmtMoney(total) + ' sin asignar';
+  if (!rows.length) { box.innerHTML = '<div class="empty">Todo el gasto está asignado a días con ventas.</div>'; return; }
+  box.innerHTML = rows.map(r =>
+    '<div class="ad-row"><div><div class="ad-date">' + fmtLong(r.date) + '</div>' +
+    '<div class="ad-src">Manual</div></div>' +
+    '<div class="ad-amt">' + fmtMoney(r.amt) +
+    '<span class="ad-warn">Sin ventas · gasto conservado en el día</span></div></div>'
+  ).join('');
+}
+
 function renderHistory() {
   const box = $('history-list');
   if (!dashSales.length) { box.innerHTML = '<div class="empty">Sin ventas en el período.</div>'; return; }
@@ -622,6 +913,34 @@ function renderHistory() {
   box.innerHTML = dashSales.map(s =>
     saleCardHTML(s, { adPortion: adMap[s.sale_date] || 0 })).join('');
   bindSaleCardButtons(box);
+}
+
+/* ================= Modals ================= */
+function openModal(id) { $(id).classList.remove('hidden'); }
+function closeModal(id) { $(id).classList.add('hidden'); }
+
+async function saveAd() {
+  const errBox = $('ad-error');
+  errBox.classList.add('hidden');
+  const date = $('ad-date').value;
+  const amt = Math.max(0, Number($('ad-amount').value) || 0);
+  if (!date) { errBox.textContent = 'Elige la fecha.'; errBox.classList.remove('hidden'); return; }
+  const btn = $('ad-save');
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  try {
+    const { error } = await sb.from('ad_spend')
+      .upsert({ spend_date: date, amount_dop: amt }, { onConflict: 'spend_date' });
+    if (error) throw error;
+    closeModal('modal-ad-back');
+    $('ad-amount').value = '';
+    toast('Publicidad registrada.');
+    if (currentView === 'dashboard') loadDashboard();
+  } catch (err) {
+    errBox.textContent = dbError(err, 'No se pudo guardar.');
+    errBox.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Guardar';
+  }
 }
 
 /* ================= Bindings ================= */
@@ -649,6 +968,25 @@ function bindAll() {
   };
   $('btn-refresh-sources').onclick = refresh;
   $('btn-refresh-all').onclick = refresh;
+
+  // ad modal
+  const openAd = () => {
+    $('ad-error').classList.add('hidden');
+    if (!$('ad-date').value) $('ad-date').value = todayISO();
+    openModal('modal-ad-back');
+  };
+  $('btn-reg-publicidad').onclick = openAd;
+  $('btn-consultar-meta').onclick = openAd;
+  $('ad-cancel').onclick = () => closeModal('modal-ad-back');
+  $('ad-save').onclick = saveAd;
+
+  // delete modal
+  $('del-cancel').onclick = () => { deleteId = null; closeModal('modal-del-back'); };
+  $('del-confirm').onclick = confirmDelete;
+
+  // close modals on backdrop click
+  document.querySelectorAll('.modal-back').forEach(m =>
+    m.addEventListener('click', e => { if (e.target === m) m.classList.add('hidden'); }));
 
   // dashboard filters
   $('period-pills').querySelectorAll('.pill').forEach(p =>
@@ -686,6 +1024,29 @@ function bindAll() {
     sellerFilterId = $('seller-filter').value;
     loadDashboard();
   });
+  $('analysis-tabs').querySelectorAll('.pill').forEach(p =>
+    p.onclick = () => {
+      $('analysis-tabs').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      analysisTab = p.dataset.t;
+      renderAnalysis();
+    });
+  $('chart-group-pills').querySelectorAll('.pill').forEach(p =>
+    p.onclick = () => {
+      $('chart-group-pills').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      chartGroup = p.dataset.g;
+      $('chart-eyebrow').textContent = chartGroup === 'year' ? 'Por año' :
+        chartGroup === 'month' ? 'Por mes' : 'Por día';
+      renderChart();
+    });
+  $('chart-metric-pills').querySelectorAll('.pill').forEach(p =>
+    p.onclick = () => {
+      $('chart-metric-pills').querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
+      p.classList.add('active');
+      chartMetric = p.dataset.m;
+      renderChart();
+    });
 
   bindSaleForm();
 }
