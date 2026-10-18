@@ -312,8 +312,7 @@ function updateSummary() {
 
 function resetSaleForm() {
   editingId = null;
-  $('sale-date').value = todayISO();
-  $('reg-date-label').textContent = fmtLong(todayISO());
+  setSaleDate(todayISO());
   $('sale-qty').value = '1';
   $('sale-search').value = '';
   $('sale-product').value = '';
@@ -353,10 +352,6 @@ async function saveSale() {
       if (error) throw error;
       toast('Venta actualizada.');
     } else {
-      const { error } = await sb.from('sales').insert(row);
-      if (error) throw error;
-      toast('Venta registrada.');
-    }
     if (manualCost) {
       try {
         await sb.from('products').update({ cost_dop: manualCost }).eq('id', p.id);
@@ -379,7 +374,7 @@ function editSale(id) {
   if (!s) return;
   editingId = id;
   showView('registrar');
-  $('sale-date').value = s.sale_date;
+  setSaleDate(s.sale_date);
   $('sale-qty').value = s.quantity;
   const p = productById(s.product_id);
   $('sale-product').value = p ? String(p.id) : '';
@@ -554,7 +549,7 @@ function syncFilterUI() {
   const isRange = periodMode === 'range';
   $('ref-field').classList.toggle('hidden', isRange);
   $('range-fields').classList.toggle('hidden', !isRange);
-  $('ref-date-dmy').textContent = '· ' + fmtDMY($('ref-date').value || refDateISO);
+  $('ref-date-btn-label').textContent = fmtDMY(refDateISO);
   if (isRange) $('range-btn-label').textContent = fmtDMY(rangeFromISO) + ' – ' + fmtDMY(rangeToISO);
 }
 
@@ -563,10 +558,23 @@ const MESES_LONG = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio',
   'Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 let pkViewY = 0, pkViewM = 0;
 let pkFrom = null, pkTo = null, pkLastPreset = null;
+let pkMode = 'range';            // 'range' | 'single'
+let pkSingleTarget = null;       // 'sale' | 'ref' | 'ad'
+let pkSingleVal = null;
 
 function pkOpen() {
+  pkMode = 'range';
   pkFrom = rangeFromISO; pkTo = rangeToISO; pkLastPreset = null;
   const [y, m] = pkTo.split('-').map(Number);
+  pkViewY = y; pkViewM = m - 1;
+  pkRender();
+  $('picker-back').classList.remove('hidden');
+}
+function pkOpenSingle(target) {
+  pkMode = 'single'; pkSingleTarget = target; pkLastPreset = null;
+  const hid = target === 'sale' ? 'sale-date' : target === 'ref' ? 'ref-date' : 'ad-date';
+  pkSingleVal = $(hid).value || todayISO();
+  const [y, m] = pkSingleVal.split('-').map(Number);
   pkViewY = y; pkViewM = m - 1;
   pkRender();
   $('picker-back').classList.remove('hidden');
@@ -579,6 +587,16 @@ function pkShiftView(d) {
 }
 function pkRender() {
   $('pk-title').textContent = MESES_LONG[pkViewM] + ' ' + pkViewY;
+  const single = pkMode === 'single';
+  // presets: single mode shows only Hoy/Ayer
+  document.querySelectorAll('#pk-presets button').forEach(x => {
+    const show = single ? (x.dataset.pr === 'today' || x.dataset.pr === 'yesterday') : true;
+    x.style.display = show ? '' : 'none';
+    x.classList.toggle('active', x.dataset.pr === pkLastPreset);
+  });
+  // footer labels
+  $('pk-from-label').textContent = single ? 'Fecha' : 'Fecha de inicio';
+  $('pk-to-wrap').classList.toggle('hidden', single);
   const grid = $('pk-grid');
   grid.innerHTML = '';
   const first = new Date(pkViewY, pkViewM, 1);
@@ -592,7 +610,9 @@ function pkRender() {
     b.className = 'pk-day';
     b.textContent = d.getDate();
     if (d.getMonth() !== pkViewM) b.classList.add('dim');
-    if (pkFrom && pkTo) {
+    if (single) {
+      if (iso === pkSingleVal) b.classList.add('single');
+    } else if (pkFrom && pkTo) {
       if (iso === pkFrom && iso === pkTo) b.classList.add('single');
       else {
         if (iso === pkFrom) b.classList.add('range-start');
@@ -600,19 +620,28 @@ function pkRender() {
         if (iso > pkFrom && iso < pkTo) b.classList.add('in-range');
       }
     } else if (pkFrom && iso === pkFrom) b.classList.add('single');
-    b.addEventListener('click', () => pkPick(iso));
+    b.addEventListener('click', () => single ? pkPickSingle(iso) : pkPick(iso));
     grid.appendChild(b);
   }
-  $('pk-from').textContent = fmtDMY(pkFrom);
+  $('pk-from').textContent = fmtDMY(single ? pkSingleVal : pkFrom);
   $('pk-to').textContent = fmtDMY(pkTo);
-  document.querySelectorAll('#pk-presets button').forEach(x =>
-    x.classList.toggle('active', x.dataset.pr === pkLastPreset));
 }
 function pkPick(iso) {
   pkLastPreset = null;
   if (!pkFrom || (pkFrom && pkTo)) { pkFrom = iso; pkTo = null; }
   else if (iso >= pkFrom) { pkTo = iso; }
   else { pkFrom = iso; }
+  pkRender();
+}
+function pkPickSingle(iso) {
+  pkLastPreset = null;
+  pkSingleVal = iso;
+  pkRender();
+}
+function pkSetSingle(iso) {
+  pkSingleVal = iso;
+  const [y, m] = iso.split('-').map(Number);
+  pkViewY = y; pkViewM = m - 1;
   pkRender();
 }
 function pkSetRange(from, to) {
@@ -642,12 +671,32 @@ function pkPresetDates(which) {
   }
 }
 function pkApply() {
+  if (pkMode === 'single') {
+    if (!pkSingleVal) { toast('Selecciona una fecha.', true); return; }
+    const v = pkSingleVal;
+    pkClose();
+    if (pkSingleTarget === 'sale') setSaleDate(v);
+    else if (pkSingleTarget === 'ref') {
+      $('ref-date').value = v; refDateISO = v;
+      syncFilterUI(); loadDashboard();
+    } else {
+      $('ad-date').value = v; $('ad-date-label').textContent = fmtDMY(v);
+    }
+    return;
+  }
   if (!pkFrom) { toast('Selecciona la fecha de inicio.', true); return; }
   rangeFromISO = pkFrom;
   rangeToISO = pkTo || pkFrom;
   pkClose();
   syncFilterUI();
   loadDashboard();
+}
+
+/* single-date field helpers */
+function setSaleDate(iso) {
+  $('sale-date').value = iso;
+  $('sale-date-label').textContent = fmtDMY(iso);
+  $('reg-date-label').textContent = fmtLong(iso);
 }
 
 function dashQuery() {
@@ -972,7 +1021,10 @@ function bindAll() {
   // ad modal
   const openAd = () => {
     $('ad-error').classList.add('hidden');
-    if (!$('ad-date').value) $('ad-date').value = todayISO();
+    if (!$('ad-date').value) {
+      $('ad-date').value = todayISO();
+      $('ad-date-label').textContent = fmtDMY(todayISO());
+    }
     openModal('modal-ad-back');
   };
   $('btn-reg-publicidad').onclick = openAd;
@@ -1001,13 +1053,9 @@ function bindAll() {
       syncFilterUI();
       loadDashboard();
     });
-  $('ref-date').addEventListener('change', () => {
-    if ($('ref-date').value) {
-      refDateISO = $('ref-date').value;
-      syncFilterUI();
-      loadDashboard();
-    }
-  });
+  $('ref-date-btn').addEventListener('click', () => pkOpenSingle('ref'));
+  $('sale-date-btn').addEventListener('click', () => pkOpenSingle('sale'));
+  $('ad-date-btn').addEventListener('click', () => pkOpenSingle('ad'));
   $('range-btn').addEventListener('click', () => pkOpen());
   $('pk-prev').addEventListener('click', () => { pkShiftView(-1); });
   $('pk-next').addEventListener('click', () => { pkShiftView(1); });
@@ -1018,7 +1066,7 @@ function bindAll() {
     b.addEventListener('click', () => {
       const [f, t] = pkPresetDates(b.dataset.pr);
       pkLastPreset = b.dataset.pr;
-      pkSetRange(f, t);
+      if (pkMode === 'single') pkSetSingle(f); else pkSetRange(f, t);
     }));
   $('seller-filter').addEventListener('change', () => {
     sellerFilterId = $('seller-filter').value;
@@ -1056,6 +1104,9 @@ function bindAll() {
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   bindAll();
   $('ref-date').value = refDateISO;
+  $('ad-date').value = todayISO();
+  $('ad-date-label').textContent = fmtDMY(todayISO());
+  setSaleDate(todayISO());
   syncFilterUI();
   try {
     if (await restoreSession()) await enterApp();
