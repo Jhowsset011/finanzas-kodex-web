@@ -158,8 +158,10 @@
             <input type="date" id="ref-date">
           </label>
           <div class="range-fields hidden" id="range-fields">
-            <label class="field"><span>Desde</span><input type="date" id="range-from"></label>
-            <label class="field"><span>Hasta</span><input type="date" id="range-to"></label>
+            <button class="range-btn" id="range-btn" type="button">
+              <span class="range-btn-label" id="range-btn-label"></span>
+              <span class="range-btn-cal">📅</span>
+            </button>
           </div>
           <label class="field hidden" id="seller-filter-wrap">
             <span>Vendedor</span>
@@ -312,6 +314,42 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
+
+<div class="picker-back hidden" id="picker-back">
+  <div class="picker" role="dialog" aria-label="Seleccionar rango de fechas">
+    <div class="picker-main">
+      <div class="picker-cal">
+        <div class="picker-head">
+          <button class="picker-nav" id="pk-prev" type="button">‹</button>
+          <span class="picker-title" id="pk-title"></span>
+          <button class="picker-nav" id="pk-next" type="button">›</button>
+        </div>
+        <div class="picker-week">
+          <span>Lu</span><span>Ma</span><span>Mié</span><span>Jue</span><span>Vi</span><span>Sá</span><span>Do</span>
+        </div>
+        <div class="picker-grid" id="pk-grid"></div>
+        <div class="picker-dates">
+          <div class="picker-date"><span>Fecha de inicio</span><b id="pk-from">—</b></div>
+          <div class="picker-date"><span>Fecha de finalización</span><b id="pk-to">—</b></div>
+        </div>
+      </div>
+      <div class="picker-presets" id="pk-presets">
+        <button type="button" data-pr="today">Hoy</button>
+        <button type="button" data-pr="yesterday">Ayer</button>
+        <button type="button" data-pr="thisWeek">Esta semana</button>
+        <button type="button" data-pr="lastWeek">Última semana</button>
+        <button type="button" data-pr="thisMonth">Este mes</button>
+        <button type="button" data-pr="lastMonth">Último mes</button>
+        <button type="button" data-pr="last7">Últimos 7 días</button>
+        <button type="button" data-pr="last30">Últimos 30 días</button>
+      </div>
+    </div>
+    <div class="picker-foot">
+      <button class="picker-btn" id="pk-cancel" type="button">CANCELAR</button>
+      <button class="picker-btn primary" id="pk-done" type="button">HECHO</button>
+    </div>
+  </div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="app.js"></script>
