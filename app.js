@@ -352,6 +352,10 @@ async function saveSale() {
       if (error) throw error;
       toast('Venta actualizada.');
     } else {
+      const { error } = await sb.from('sales').insert(row);
+      if (error) throw error;
+      toast('Venta registrada.');
+    }
     if (manualCost) {
       try {
         await sb.from('products').update({ cost_dop: manualCost }).eq('id', p.id);
