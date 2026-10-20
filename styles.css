@@ -108,6 +108,23 @@ h1.title { font-size: 44px; font-weight: 800; letter-spacing: -1px; line-height:
 }
 .field input::placeholder, .field textarea::placeholder { color: var(--text-faint); }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.row3 { display: grid; grid-template-columns: .7fr 1fr 1fr; gap: 14px; }
+.sale-item { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 4px; }
+.sale-item:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+.item-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.item-title { font-size: 12.5px; font-weight: 750; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+.item-remove { background: none; border: 0; color: var(--red); font-size: 13px; font-weight: 650; padding: 2px 4px; }
+.btn-add-item {
+  width: 100%; background: transparent; color: var(--green);
+  border: 1.5px dashed rgba(34, 197, 94, .55); border-radius: 8px;
+  font-weight: 700; font-size: 14.5px; padding: 11px 0; margin: 2px 0 16px;
+}
+.btn-add-item:hover { background: rgba(34, 197, 94, .08); }
+.batch-badge {
+  display: inline-block; font-size: 11px; font-weight: 750;
+  background: #182030; color: #7dd3fc;
+  border-radius: 20px; padding: 2px 10px; margin-top: 6px; margin-left: 6px;
+}
 
 .btn {
   display: inline-block; border: 0; border-radius: 8px;
@@ -325,6 +342,7 @@ td.num.green { color: var(--green); font-weight: 750; }
   .nav-btn svg { width: 19px; height: 19px; }
   .main { margin-left: 0; padding: 18px 14px 96px; }
   .row2 { grid-template-columns: 1fr; }
+  .row3 { grid-template-columns: 1fr; }
   .stats-row { grid-template-columns: 1fr 1fr; }
   .head-actions { position: static; margin-top: 10px; }
   .summary-strip { grid-template-columns: 1fr 1fr; }
