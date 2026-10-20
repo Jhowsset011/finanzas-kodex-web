@@ -240,13 +240,29 @@ async function enterApp() {
 
 /* ================= Sale form ================= */
 function buildProductSelect() {
-  const sel = $('sale-product');
-  sel.innerHTML = '<option value="">Selecciona un producto</option>' +
-    productsCache.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
+  document.querySelectorAll('.item-product').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Selecciona un producto</option>' +
+      productsCache.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
+    if (cur) sel.value = cur;
+  });
 }
 
-function bindSaleForm() {
-  const search = $('sale-search'), results = $('ac-results'), sel = $('sale-product');
+function itemBlocks() { return [...document.querySelectorAll('#sale-items .sale-item')]; }
+
+function blockParts(block) {
+  return {
+    search: block.querySelector('.item-search'),
+    results: block.querySelector('.ac-results'),
+    sel: block.querySelector('.item-product'),
+    qty: block.querySelector('.item-qty'),
+    cost: block.querySelector('.item-cost'),
+    price: block.querySelector('.item-price'),
+  };
+}
+
+function bindItemBlock(block) {
+  const { search, results, sel, qty, cost, price } = blockParts(block);
   search.addEventListener('input', () => {
     const q = norm(search.value.trim());
     if (q.length < 2) { results.classList.add('hidden'); return; }
@@ -259,35 +275,79 @@ function bindSaleForm() {
     ).join('');
     results.classList.remove('hidden');
     results.querySelectorAll('.ac-item').forEach(o =>
-      o.onclick = () => { selectProductById(o.dataset.id); results.classList.add('hidden'); search.value = ''; });
+      o.onclick = () => { selectBlockProduct(block, o.dataset.id); results.classList.add('hidden'); search.value = ''; });
   });
   document.addEventListener('click', e => {
     if (!results.contains(e.target) && e.target !== search) results.classList.add('hidden');
   });
-  sel.addEventListener('change', () => selectProductById(sel.value || null));
-  ['sale-qty', 'sale-cost', 'sale-price', 'sale-ship'].forEach(id =>
-    $(id).addEventListener('input', updateSummary));
+  sel.addEventListener('change', () => selectBlockProduct(block, sel.value || null));
+  [qty, cost, price].forEach(el => el.addEventListener('input', updateSummary));
+  const rm = block.querySelector('.item-remove');
+  if (rm) rm.onclick = () => { block.remove(); renumberItems(); updateSummary(); };
+}
+
+function selectBlockProduct(block, id) {
+  const p = id ? productById(id) : null;
+  const { sel, cost } = blockParts(block);
+  sel.value = p ? String(p.id) : '';
+  cost.value = p ? (p.cost_dop === 0 ? '' : Number(p.cost_dop)) : '';
+  cost.placeholder = p ? (p.cost_dop === 0 ? 'Pendiente — escríbelo' : '') : 'Pendiente';
+  updateSummary();
+}
+
+function renumberItems() {
+  const blocks = itemBlocks();
+  blocks.forEach((b, i) => {
+    b.querySelector('.item-title').textContent = 'Producto ' + (i + 1);
+    const rm = b.querySelector('.item-remove');
+    if (rm) rm.classList.toggle('hidden', blocks.length <= 1 || !!editingId);
+  });
+  $('sale-add-item').classList.toggle('hidden', !!editingId);
+}
+
+function addItemBlock() {
+  const block = document.createElement('div');
+  block.className = 'sale-item';
+  block.innerHTML =
+    '<div class="item-head"><span class="item-title"></span>' +
+    '<button type="button" class="item-remove">Quitar</button></div>' +
+    '<label class="field"><span>Buscar producto</span><div class="ac-wrap">' +
+    '<input type="text" class="item-search" placeholder="Modelo, referencia o marca" autocomplete="off">' +
+    '<div class="ac-results hidden"></div></div></label>' +
+    '<label class="field"><span>Producto</span><select class="item-product">' +
+    '<option value="">Selecciona un producto</option></select></label>' +
+    '<div class="row3">' +
+    '<label class="field"><span>Cantidad</span><input type="number" class="item-qty" value="1" min="1" step="1" inputmode="numeric"></label>' +
+    '<label class="field"><span>Costo Omega (RD$)</span><input type="number" class="item-cost" placeholder="Pendiente" min="0" step="0.01" inputmode="decimal"></label>' +
+    '<label class="field"><span>Precio de venta (RD$)</span><input type="number" class="item-price" placeholder="0.00" min="0" step="1" inputmode="decimal"></label>' +
+    '</div>';
+  $('sale-items').appendChild(block);
+  buildProductSelect();
+  bindItemBlock(block);
+  renumberItems();
+  blockParts(block).search.focus();
+}
+
+function bindSaleForm() {
+  bindItemBlock(itemBlocks()[0]);
+  $('sale-ship').addEventListener('input', updateSummary);
+  $('sale-add-item').onclick = addItemBlock;
   $('sale-save').onclick = saveSale;
   $('sale-cancel').onclick = resetSaleForm;
 }
 
-function selectProductById(id) {
-  const p = id ? productById(id) : null;
-  $('sale-product').value = p ? String(p.id) : '';
-  $('sale-cost').value = p ? (p.cost_dop === 0 ? '' : Number(p.cost_dop)) : '';
-  $('sale-cost').placeholder = p ? (p.cost_dop === 0 ? 'Pendiente — escríbelo' : '') : 'Pendiente';
-  updateSummary();
-}
-function selectedProduct() {
-  const id = $('sale-product').value;
-  return id ? productById(id) : null;
+function readBlock(block) {
+  const { sel, qty, cost, price } = blockParts(block);
+  return {
+    product: sel.value ? productById(sel.value) : null,
+    qty: Math.max(1, parseInt(qty.value, 10) || 1),
+    cost: Math.max(0, Number(cost.value) || 0),
+    price: Math.max(0, Number(price.value) || 0),
+  };
 }
 
-function readSaleForm() {
+function readSaleCommon() {
   return {
-    qty: Math.max(1, parseInt($('sale-qty').value, 10) || 1),
-    cost: Math.max(0, Number($('sale-cost').value) || 0),
-    price: Math.max(0, Number($('sale-price').value) || 0),
     ship: Math.max(0, Number($('sale-ship').value) || 0),
     date: $('sale-date').value || todayISO(),
     desc: $('sale-desc').value.trim().slice(0, 300),
@@ -295,9 +355,14 @@ function readSaleForm() {
 }
 
 function updateSummary() {
-  const f = readSaleForm();
-  const venta = f.qty * f.price;
-  const margin = venta - f.qty * f.cost - f.ship;
+  let venta = 0, gross = 0;
+  itemBlocks().forEach(b => {
+    const it = readBlock(b);
+    venta += it.qty * it.price;
+    gross += it.qty * it.price - it.qty * it.cost;
+  });
+  const ship = Math.max(0, Number($('sale-ship').value) || 0);
+  const margin = gross - ship;
   const pct = venta > 0 ? (margin / venta * 100) : 0;
   $('ss-venta').textContent = fmtMoney(venta);
   if (isOwner()) {
@@ -313,55 +378,96 @@ function updateSummary() {
 function resetSaleForm() {
   editingId = null;
   setSaleDate(todayISO());
-  $('sale-qty').value = '1';
-  $('sale-search').value = '';
-  $('sale-product').value = '';
-  $('sale-cost').value = ''; $('sale-cost').placeholder = 'Pendiente';
-  $('sale-price').value = '';
+  const blocks = itemBlocks();
+  blocks.slice(1).forEach(b => b.remove());
+  const first = blockParts(blocks[0]);
+  first.qty.value = '1';
+  first.search.value = '';
+  first.sel.value = '';
+  first.cost.value = ''; first.cost.placeholder = 'Pendiente';
+  first.price.value = '';
   $('sale-ship').value = '0';
   $('sale-desc').value = '';
   $('sale-error').classList.add('hidden');
   $('sale-save').textContent = 'Registrar venta';
   $('sale-cancel').classList.add('hidden');
+  renumberItems();
   updateSummary();
+}
+
+async function persistManualCost(it) {
+  if (it.product && it.product.cost_dop === 0 && it.cost > 0) {
+    try {
+      await sb.from('products').update({ cost_dop: it.cost }).eq('id', it.product.id);
+      it.product.cost_dop = it.cost;
+    } catch (_) { /* best effort: RLS may not allow */ }
+  }
 }
 
 async function saveSale() {
   const errBox = $('sale-error');
   errBox.classList.add('hidden');
-  const p = selectedProduct();
-  if (!p) { errBox.textContent = 'Busca y elige un producto primero.'; errBox.classList.remove('hidden'); return; }
-  const f = readSaleForm();
-  if (f.price <= 0) { errBox.textContent = 'Escribe el precio de venta.'; errBox.classList.remove('hidden'); return; }
+  const common = readSaleCommon();
   const btn = $('sale-save');
-  btn.disabled = true; btn.textContent = 'Guardando…';
-  const row = {
-    seller_id: profile.id,
-    product_id: p.id,
-    quantity: f.qty,
-    unit_sale_price_dop: f.price,
-    shipping_cost_dop: f.ship,
-    sale_date: f.date,
-    description: f.desc,
-  };
-  // persist manual cost for products without cost
-  const manualCost = (p.cost_dop === 0 && f.cost > 0) ? f.cost : 0;
-  try {
-    if (editingId) {
+
+  if (editingId) {
+    const it = readBlock(itemBlocks()[0]);
+    if (!it.product) { errBox.textContent = 'Busca y elige un producto primero.'; errBox.classList.remove('hidden'); return; }
+    if (it.price <= 0) { errBox.textContent = 'Escribe el precio de venta.'; errBox.classList.remove('hidden'); return; }
+    const orig = findSaleInCache(editingId);
+    btn.disabled = true; btn.textContent = 'Guardando…';
+    const row = {
+      seller_id: orig ? orig.seller_id : profile.id,
+      product_id: it.product.id,
+      quantity: it.qty,
+      unit_sale_price_dop: it.price,
+      shipping_cost_dop: common.ship,
+      sale_date: common.date,
+      description: common.desc,
+    };
+    try {
       const { error } = await sb.from('sales').update(row).eq('id', editingId);
       if (error) throw error;
+      await persistManualCost(it);
       toast('Venta actualizada.');
-    } else {
-      const { error } = await sb.from('sales').insert(row);
-      if (error) throw error;
-      toast('Venta registrada.');
+      resetSaleForm();
+      loadRecent();
+    } catch (err) {
+      errBox.textContent = dbError(err, 'No se pudo guardar la venta.');
+      errBox.classList.remove('hidden');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = editingId ? 'Guardar cambios' : 'Registrar venta';
     }
-    if (manualCost) {
-      try {
-        await sb.from('products').update({ cost_dop: manualCost }).eq('id', p.id);
-        p.cost_dop = manualCost;
-      } catch (_) { /* best effort: RLS may not allow */ }
-    }
+    return;
+  }
+
+  const items = itemBlocks().map(readBlock);
+  for (let i = 0; i < items.length; i++) {
+    if (!items[i].product) { errBox.textContent = 'Elige el producto ' + (i + 1) + '.'; errBox.classList.remove('hidden'); return; }
+    if (items[i].price <= 0) { errBox.textContent = 'Escribe el precio de venta del producto ' + (i + 1) + '.'; errBox.classList.remove('hidden'); return; }
+  }
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  const batch = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+  const rows = items.map((it, i) => ({
+    seller_id: profile.id,
+    product_id: it.product.id,
+    quantity: it.qty,
+    unit_sale_price_dop: it.price,
+    shipping_cost_dop: i === 0 ? common.ship : 0,
+    sale_date: common.date,
+    description: common.desc,
+    batch_id: batch,
+  }));
+  try {
+    const { error } = await sb.from('sales').insert(rows);
+    if (error) throw error;
+    for (const it of items) await persistManualCost(it);
+    toast(items.length > 1 ? 'Venta registrada (' + items.length + ' productos).' : 'Venta registrada.');
     resetSaleForm();
     loadRecent();
   } catch (err) {
@@ -369,26 +475,29 @@ async function saveSale() {
     errBox.classList.remove('hidden');
   } finally {
     btn.disabled = false;
-    btn.textContent = editingId ? 'Guardar cambios' : 'Registrar venta';
+    btn.textContent = 'Registrar venta';
   }
 }
 
 function editSale(id) {
   const s = allSalesCache.find(x => x.id === id) || dashSales.find(x => x.id === id);
   if (!s) return;
+  resetSaleForm();
   editingId = id;
   showView('registrar');
   setSaleDate(s.sale_date);
-  $('sale-qty').value = s.quantity;
+  const first = blockParts(itemBlocks()[0]);
   const p = productById(s.product_id);
-  $('sale-product').value = p ? String(p.id) : '';
+  first.sel.value = p ? String(p.id) : '';
   const cost = p ? Number(p.cost_dop) : 0;
-  $('sale-cost').value = cost === 0 ? '' : cost;
-  $('sale-price').value = s.unit_sale_price_dop;
+  first.qty.value = s.quantity;
+  first.cost.value = cost === 0 ? '' : cost;
+  first.price.value = s.unit_sale_price_dop;
   $('sale-ship').value = s.shipping_cost_dop;
   $('sale-desc').value = s.description || '';
   $('sale-save').textContent = 'Guardar cambios';
   $('sale-cancel').classList.remove('hidden');
+  renumberItems();
   updateSummary();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -410,6 +519,12 @@ async function confirmDelete() {
 
 /* ================= Sale cards ================= */
 let allSalesCache = [];   // recent sales (registrar view)
+
+function batchCountsOf(rows) {
+  const m = {};
+  (rows || []).forEach(x => { if (x.batch_id) m[x.batch_id] = (m[x.batch_id] || 0) + 1; });
+  return m;
+}
 
 function saleCardHTML(s, opts) {
   const p = productById(s.product_id);
@@ -451,6 +566,7 @@ function saleCardHTML(s, opts) {
         '<div class="sale-sub">' + esc(qtyTxt) + '</div>' +
         (s.description ? '<div class="sale-desc">' + esc(s.description) + '</div>' : '') +
         (isOwner() && seller ? '<span class="seller-badge">' + esc(seller.name) + '</span>' : '') +
+        ((opts.batchCount || 1) > 1 ? '<span class="batch-badge">Venta múltiple · ' + opts.batchCount + ' productos</span>' : '') +
         ((!isOwner() && s.paid) ? '<span class="paid-badge">Pagado ✓</span>' : '') +
         '<div class="sale-links">' +
           '<button class="link-dim" data-edit="' + s.id + '">Editar</button>' +
@@ -477,17 +593,30 @@ function paintPaidButton(btn, paid) {
 
 async function togglePaid(btn, saleId, currentlyPaid) {
   const newPaid = !currentlyPaid;
-  paintPaidButton(btn, newPaid);                       // instant UI
   const cached = findSaleInCache(saleId);
-  if (cached) cached.paid = newPaid;
+  // a multi-product registration is paid (or un-paid) as a whole
+  let ids = [saleId];
+  if (cached && cached.batch_id) {
+    const same = [...allSalesCache, ...dashSales].filter(x => x.batch_id === cached.batch_id);
+    ids = [...new Set(same.map(x => Number(x.id)))];
+    if (!ids.includes(saleId)) ids.push(saleId);
+  }
+  const paintAll = val => document.querySelectorAll('[data-paid]').forEach(b => {
+    if (ids.includes(Number(b.dataset.paid))) paintPaidButton(b, val);
+  });
+  const setCaches = val => [...allSalesCache, ...dashSales].forEach(x => {
+    if (ids.includes(Number(x.id))) x.paid = val;
+  });
+  paintAll(newPaid);                       // instant UI
+  setCaches(newPaid);
   btn.disabled = true;
   try {
-    const { error } = await sb.from('sales').update({ paid: newPaid }).eq('id', saleId);
+    const { error } = await sb.from('sales').update({ paid: newPaid }).in('id', ids);
     if (error) throw error;
     toast(newPaid ? 'Venta marcada como pagada.' : 'Venta marcada como pendiente de pago.');
   } catch (err) {
-    if (cached) cached.paid = currentlyPaid;
-    paintPaidButton(btn, currentlyPaid);
+    setCaches(currentlyPaid);
+    paintAll(currentlyPaid);
     toast(dbError(err, 'No se pudo actualizar el estado de pago.'), true);
   } finally {
     btn.disabled = false;
@@ -526,6 +655,7 @@ async function loadRecent() {
       (allDay || []).forEach(s => { if (s.seller_id === profile.id) dayCounts[s.sale_date] = (dayCounts[s.sale_date] || 0) + 1; });
     }
     if (!allSalesCache.length) { box.innerHTML = '<div class="empty">Sin ventas todavía.</div>'; return; }
+    const bc = batchCountsOf(allSalesCache);
     box.innerHTML = allSalesCache.map(s => {
       let adP = 0;
       if (isOwner()) {
@@ -533,7 +663,7 @@ async function loadRecent() {
         const n = dayCounts[s.sale_date] || 1;
         adP = amt / n;
       }
-      return saleCardHTML(s, { adPortion: adP });
+      return saleCardHTML(s, { adPortion: adP, batchCount: s.batch_id ? (bc[s.batch_id] || 1) : 1 });
     }).join('');
     bindSaleCardButtons(box);
   } catch (err) {
@@ -963,8 +1093,9 @@ function renderHistory() {
   const box = $('history-list');
   if (!dashSales.length) { box.innerHTML = '<div class="empty">Sin ventas en el período.</div>'; return; }
   const adMap = isOwner() ? adPortionMap() : {};
+  const bc = batchCountsOf(dashSales);
   box.innerHTML = dashSales.map(s =>
-    saleCardHTML(s, { adPortion: adMap[s.sale_date] || 0 })).join('');
+    saleCardHTML(s, { adPortion: adMap[s.sale_date] || 0, batchCount: s.batch_id ? (bc[s.batch_id] || 1) : 1 })).join('');
   bindSaleCardButtons(box);
 }
 
