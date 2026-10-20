@@ -67,40 +67,47 @@
         <div class="reg-grid">
           <div>
             <div class="card accent-top">
-              <div class="row2">
-                <label class="field">
-                  <span>Fecha</span>
-                  <button type="button" class="date-btn" id="sale-date-btn"><span id="sale-date-label"></span><span class="range-btn-cal">📅</span></button>
-                  <input type="hidden" id="sale-date">
-                </label>
-                <label class="field">
-                  <span>Cantidad</span>
-                  <input type="number" id="sale-qty" value="1" min="1" step="1" inputmode="numeric">
-                </label>
-              </div>
               <label class="field">
-                <span>Buscar producto</span>
-                <div class="ac-wrap">
-                  <input type="text" id="sale-search" placeholder="Modelo, referencia o marca" autocomplete="off">
-                  <div id="ac-results" class="ac-results hidden"></div>
+                <span>Fecha</span>
+                <button type="button" class="date-btn" id="sale-date-btn"><span id="sale-date-label"></span><span class="range-btn-cal">📅</span></button>
+                <input type="hidden" id="sale-date">
+              </label>
+              <div id="sale-items">
+                <div class="sale-item">
+                  <div class="item-head">
+                    <span class="item-title">Producto 1</span>
+                    <button type="button" class="item-remove hidden">Quitar</button>
+                  </div>
+                  <label class="field">
+                    <span>Buscar producto</span>
+                    <div class="ac-wrap">
+                      <input type="text" class="item-search" id="sale-search" placeholder="Modelo, referencia o marca" autocomplete="off">
+                      <div class="ac-results hidden" id="ac-results"></div>
+                    </div>
+                  </label>
+                  <label class="field">
+                    <span>Producto</span>
+                    <select class="item-product" id="sale-product">
+                      <option value="">Selecciona un producto</option>
+                    </select>
+                  </label>
+                  <div class="row3">
+                    <label class="field">
+                      <span>Cantidad</span>
+                      <input type="number" class="item-qty" id="sale-qty" value="1" min="1" step="1" inputmode="numeric">
+                    </label>
+                    <label class="field">
+                      <span>Costo Omega (RD$)</span>
+                      <input type="number" class="item-cost" id="sale-cost" placeholder="Pendiente" min="0" step="0.01" inputmode="decimal">
+                    </label>
+                    <label class="field">
+                      <span>Precio de venta (RD$)</span>
+                      <input type="number" class="item-price" id="sale-price" placeholder="0.00" min="0" step="1" inputmode="decimal">
+                    </label>
+                  </div>
                 </div>
-              </label>
-              <label class="field">
-                <span>Producto</span>
-                <select id="sale-product">
-                  <option value="">Selecciona un producto</option>
-                </select>
-              </label>
-              <div class="row2">
-                <label class="field">
-                  <span>Costo Omega (RD$)</span>
-                  <input type="number" id="sale-cost" placeholder="Pendiente" min="0" step="0.01" inputmode="decimal">
-                </label>
-                <label class="field">
-                  <span>Precio de venta (RD$)</span>
-                  <input type="number" id="sale-price" placeholder="0.00" min="0" step="1" inputmode="decimal">
-                </label>
               </div>
+              <button type="button" class="btn btn-add-item" id="sale-add-item">+ Agregar otro producto</button>
               <label class="field">
                 <span>Envío (RD$)</span>
                 <input type="number" id="sale-ship" value="0" min="0" step="1" inputmode="decimal">
