@@ -414,10 +414,15 @@ async function saveSale() {
     const it = readBlock(itemBlocks()[0]);
     if (!it.product) { errBox.textContent = 'Busca y elige un producto primero.'; errBox.classList.remove('hidden'); return; }
     if (it.price <= 0) { errBox.textContent = 'Escribe el precio de venta.'; errBox.classList.remove('hidden'); return; }
-    const orig = findSaleInCache(editingId);
+    let orig = findSaleInCache(editingId);
+    if (!orig) {
+      const { data: fresh, error: freshErr } = await sb.from('sales').select('*').eq('id', editingId).single();
+      if (freshErr || !fresh) { errBox.textContent = 'No se pudo cargar la venta original. Inténtalo de nuevo.'; errBox.classList.remove('hidden'); return; }
+      orig = fresh;
+    }
     btn.disabled = true; btn.textContent = 'Guardando…';
     const row = {
-      seller_id: orig ? orig.seller_id : profile.id,
+      seller_id: orig.seller_id,
       product_id: it.product.id,
       quantity: it.qty,
       unit_sale_price_dop: it.price,
@@ -425,6 +430,10 @@ async function saveSale() {
       sale_date: common.date,
       description: common.desc,
     };
+    if (orig.seller_id !== profile.id) {
+      row.edited_by_seller_id = profile.id;
+      row.edited_at = new Date().toISOString();
+    }
     try {
       const { error } = await sb.from('sales').update(row).eq('id', editingId);
       if (error) throw error;
@@ -533,6 +542,12 @@ function saleCardHTML(s, opts) {
   const venta = (Number(s.quantity) || 0) * (Number(s.unit_sale_price_dop) || 0);
   const margin = saleMargin(s, cost);
   const seller = sellerById(s.seller_id);
+  const editedBadge = (() => {
+    if (!s.edited_by_seller_id || s.edited_by_seller_id === s.seller_id) return '';
+    const ed = sellerById(s.edited_by_seller_id);
+    const short = ed ? (ed.name === 'Jhowsse' ? 'Jh' : ed.name.split(' ')[0]) : '';
+    return short ? '<span class="edited-badge">editado por ' + esc(short) + '</span>' : '';
+  })();
   const qtyTxt = s.quantity + ' × ' + fmtMoney(s.unit_sale_price_dop);
 
   let nums;
@@ -566,6 +581,7 @@ function saleCardHTML(s, opts) {
         '<div class="sale-sub">' + esc(qtyTxt) + '</div>' +
         (s.description ? '<div class="sale-desc">' + esc(s.description) + '</div>' : '') +
         (isOwner() && seller ? '<span class="seller-badge">' + esc(seller.name) + '</span>' : '') +
+        editedBadge +
         ((opts.batchCount || 1) > 1 ? '<span class="batch-badge">Venta múltiple · ' + opts.batchCount + ' productos</span>' : '') +
         ((!isOwner() && s.paid) ? '<span class="paid-badge">Pagado ✓</span>' : '') +
         '<div class="sale-links">' +
