@@ -587,6 +587,7 @@ function saleCardHTML(s, opts) {
         '<div class="sale-links">' +
           '<button class="link-dim" data-edit="' + s.id + '">Editar</button>' +
           '<button class="link-dim" data-del="' + s.id + '">Eliminar</button>' +
+          '<button class="link-dim" data-factura="' + s.id + '">Factura</button>' +
           ((isOwner() && s.seller_id !== profile.id)
             ? '<button class="paid-btn ' + (s.paid ? 'paid-on' : 'paid-off') + '" data-paid="' + s.id + '" data-paid-state="' + (s.paid ? '1' : '0') + '">' + (s.paid ? 'Pagado ✓' : 'Marcar pagado') + '</button>'
             : '') +
@@ -644,6 +645,8 @@ function bindSaleCardButtons(container) {
     b.onclick = () => editSale(Number(b.dataset.edit)));
   container.querySelectorAll('[data-del]').forEach(b =>
     b.onclick = () => { deleteId = Number(b.dataset.del); openModal('modal-del-back'); });
+  container.querySelectorAll('[data-factura]').forEach(b =>
+    b.onclick = () => openInvoiceNameModal(Number(b.dataset.factura)));
   container.querySelectorAll('[data-paid]').forEach(b =>
     b.onclick = () => togglePaid(b, Number(b.dataset.paid), b.dataset.paidState === '1'));
 }
@@ -1113,6 +1116,124 @@ function renderHistory() {
   box.innerHTML = dashSales.map(s =>
     saleCardHTML(s, { adPortion: adMap[s.sale_date] || 0, batchCount: s.batch_id ? (bc[s.batch_id] || 1) : 1 })).join('');
   bindSaleCardButtons(box);
+}
+
+/* ================= Factura ================= */
+/* La factura es solo un documento para el cliente: NUNCA incluye costo,
+   margen, publicidad ni la parte 50/50. El nombre del cliente se escribe
+   al generar y NO se guarda en la base de datos (no hay columna ni tabla
+   de clientes; el nombre vive solo en la factura generada). */
+let invoiceSaleId = null;
+
+function invoiceRowsFor(sale) {
+  if (sale.batch_id) {
+    const seen = {};
+    const rows = [...allSalesCache, ...dashSales].filter(x => {
+      if (x.batch_id !== sale.batch_id || seen[x.id]) return false;
+      seen[x.id] = true;
+      return true;
+    });
+    if (rows.length) return rows;
+  }
+  return [sale];
+}
+
+function ensureInvoiceModal() {
+  let back = $('modal-inv-back');
+  if (back) return back;
+  back = document.createElement('div');
+  back.id = 'modal-inv-back';
+  back.className = 'modal-back hidden';
+  back.innerHTML =
+    '<div class="modal"><h2>Generar factura</h2>' +
+    '<label class="field"><span>Nombre del cliente (opcional)</span>' +
+    '<input type="text" id="inv-client-name" placeholder="Ej.: Juan Pérez" autocomplete="off"></label>' +
+    '<div class="muted" style="margin-top:10px">Si lo dejas vacío saldrá “Consumidor final”. ' +
+    'El nombre no se guarda en ningún lado, solo aparece en la factura.</div>' +
+    '<div class="btn-row">' +
+    '<button class="btn btn-secondary" id="inv-cancel">Cancelar</button>' +
+    '<button class="btn btn-primary" id="inv-generate">Generar</button>' +
+    '</div></div>';
+  document.body.appendChild(back);
+  back.addEventListener('click', e => { if (e.target === back) closeModal('modal-inv-back'); });
+  $('inv-cancel').onclick = () => closeModal('modal-inv-back');
+  $('inv-generate').onclick = generateInvoice;
+  $('inv-client-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); generateInvoice(); }
+  });
+  return back;
+}
+
+function openInvoiceNameModal(saleId) {
+  const s = findSaleInCache(saleId);
+  if (!s) { toast('No se pudo cargar la venta.', true); return; }
+  invoiceSaleId = saleId;
+  ensureInvoiceModal();
+  $('inv-client-name').value = '';
+  openModal('modal-inv-back');
+  $('inv-client-name').focus();
+}
+
+function generateInvoice() {
+  const sale = findSaleInCache(invoiceSaleId);
+  if (!sale) { toast('No se pudo cargar la venta.', true); return; }
+  const client = ($('inv-client-name').value || '').trim() || 'Consumidor final';
+  closeModal('modal-inv-back');
+  const rows = invoiceRowsFor(sale);
+  const seller = sellerById(sale.seller_id);
+  const sellerName = (seller && seller.name) || profile.name;
+  const items = rows.map(r => {
+    const p = productById(r.product_id);
+    const qty = Number(r.quantity) || 0;
+    const unit = Number(r.unit_sale_price_dop) || 0;
+    return { name: p ? p.name : 'Producto', qty, unit, sub: qty * unit };
+  });
+  const subtotal = items.reduce((a, it) => a + it.sub, 0);
+  const ship = rows.reduce((a, r) => a + (Number(r.shipping_cost_dop) || 0), 0);
+  const total = subtotal + ship;
+  const paid = rows.every(r => r.paid);
+  // número estable para ventas múltiples: el id menor del lote
+  const numId = rows.reduce((m, r) => Math.min(m, Number(r.id)), Number(sale.id));
+  const num = 'KDX-' + String(numId).padStart(6, '0');
+
+  let wrap = $('invoice-print-wrap');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'invoice-print-wrap';
+    wrap.className = 'hidden';
+    document.body.appendChild(wrap);
+  }
+  wrap.innerHTML =
+    '<div class="inv-actions">' +
+      '<button class="btn btn-primary" id="inv-print">Imprimir / Guardar PDF</button>' +
+      '<button class="btn btn-secondary" id="inv-close">Cerrar</button>' +
+    '</div>' +
+    '<div id="invoice-sheet">' +
+      '<div class="inv-head"><div class="inv-brand">KODEX GAMING</div>' +
+      '<div class="inv-doc">Factura ' + num + '</div></div>' +
+      '<div class="inv-meta">' +
+        '<div><span>Fecha:</span> ' + fmtLong(sale.sale_date) + '</div>' +
+        '<div><span>Vendedor:</span> ' + esc(sellerName) + '</div>' +
+        '<div><span>Cliente:</span> ' + esc(client) + '</div>' +
+        '<div><span>Estado:</span> ' + (paid ? 'Pagado' : 'Pendiente de pago') + '</div>' +
+      '</div>' +
+      '<table class="inv-table"><thead><tr><th>Producto</th><th class="num">Cant.</th>' +
+      '<th class="num">Precio</th><th class="num">Subtotal</th></tr></thead>' +
+      '<tbody>' + items.map(it =>
+        '<tr><td>' + esc(it.name) + '</td><td class="num">' + it.qty + '</td>' +
+        '<td class="num">' + fmtMoney(it.unit) + '</td><td class="num">' + fmtMoney(it.sub) + '</td></tr>').join('') +
+      '</tbody></table>' +
+      '<div class="inv-totals">' +
+        '<div><span>Subtotal</span><span>' + fmtMoney(subtotal) + '</span></div>' +
+        '<div><span>Envío</span><span>' + fmtMoney(ship) + '</span></div>' +
+        '<div class="inv-total"><span>Total</span><span>' + fmtMoney(total) + '</span></div>' +
+      '</div>' +
+      '<div class="inv-foot">Gracias por su compra · Ventas por WhatsApp: 809-879-6463 · kodexgaming.com</div>' +
+    '</div>';
+  wrap.classList.remove('hidden');
+  $('inv-print').onclick = () => window.print();
+  $('inv-close').onclick = () => wrap.classList.add('hidden');
+  wrap.scrollIntoView({ behavior: 'smooth' });
 }
 
 /* ================= Modals ================= */
